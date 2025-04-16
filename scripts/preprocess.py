@@ -14,10 +14,13 @@
 
 
 import os
+import json
 import pandas as pd
 from argparse import ArgumentParser
+from collections import Counter
 
-OUTPUTS_PATH = "./outputs"
+OUTPUTS_PATH = os.path.abspath("./outputs")
+CONFIG_PATH = os.path.abspath("./config/moods.json")
 
 
 def cli_arguments_preprocess() -> tuple:
@@ -29,7 +32,6 @@ def cli_arguments_preprocess() -> tuple:
     Sorce dataset file should be named "autotagging_moodtheme.tsv"
     """
     parser = ArgumentParser(description="Preprocessing autotagging moods dataset script. Cleans moods, aggregates them and saves preprocessed .tsv file")
-    filename = "autotagging_moodtheme.tsv"
 
     parser.add_argument("--path", required=True,
                       help="Path to source dataset")
@@ -42,13 +44,11 @@ def cli_arguments_preprocess() -> tuple:
 
     if args.path[-1] != "/":
         args.path += "/"
-    
-    args.path += filename
 
     if not args.moods or args.moods == "all":
         args.moods = 0
 
-    return args.path, args.moods
+    return os.path.abspath(args.path), args.moods
 
 def load_dataset(dataset_path: str) -> pd.DataFrame:
     """
@@ -123,18 +123,99 @@ def clean_dataset_pipeline(dataset: pd.DataFrame) -> pd.DataFrame:
     df = clean_id_columns(df)
     return df
 
-def merge_moods(dataset: pd.DataFrame, merge_mode: int) -> pd.DataFrame:
-    pass
+def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tuple:
+    """
+    Merges moods tags in several basic moods.
+    
+    Each unpopular mood merges with the basic mood that most often stands in pairs with it. 
+    """
+    mood_pairs = {}
 
-def main(outputs_path):
+    for basic_mood in basic_moods:
+        mood_pairs[basic_mood] = []
+
+    # Counting cycle to determine mood pairs.
+    for i, row in dataset.iterrows():
+        tags = row["tags"]
+        current_basic_mood = None
+
+        # Try to find basic mood in tags.
+        for basic_mood in basic_moods:
+            if basic_mood in tags:
+                current_basic_mood = basic_mood
+                break
+        
+        # If no basic mood in tags, skip this row.
+        if current_basic_mood is None:
+            continue
+        
+        # There is basic mood in tags, so we can build mood pairs.
+        for tag in tags:
+            if tag != current_basic_mood:
+                # Find the index of the set containing the key tag in the array of sets mood_pairs[current_basic_mood]
+                index = next((i for i, pair in enumerate(mood_pairs[current_basic_mood]) if tag in pair), None)
+
+                # If tag is not in basic moods list, we can add it to the list with count 1. Else -> increase count by 1.
+                if index is None:
+                    mood_pairs[current_basic_mood].append({tag: 1})
+                else:
+                    mood_pairs[current_basic_mood][index][tag] += 1
+        
+        # Finally, replace current tag with basic mood.
+        dataset.loc[i, "tags"] = [current_basic_mood]
+    
+    # Merging cycle to merge moods.
+    for i, row in dataset.iterrows():
+        tags = row["tags"]
+
+        # In this case we have already merged moods in the dataset.
+        if tags[0] in basic_moods:
+            continue
+
+        # Now we can start merge other moods.
+        for tag in tags:
+            if tag in basic_moods:
+                continue
+            
+            pairs_counts = {}
+
+            for basic_mood in mood_pairs.keys():
+                index = next((i for i, pair in enumerate(mood_pairs[basic_mood]) if tag in pair), None)
+
+                if index is not None:
+                    pairs_counts[basic_mood] = mood_pairs[basic_mood][index][tag]
+            
+            selected_mood = max(pairs_counts, key=pairs_counts.get) if pairs_counts else None
+
+            if selected_mood is not None:
+                tags[tags.index(tag)] = selected_mood
+            else:
+                tags.remove(tag)
+
+        # Now select the most popular mood in the tags list.
+        if len(tags) == 0:
+            continue
+
+        counter = Counter(tags)
+        selected_mood = max(counter, key=counter.get)
+        dataset.loc[i, "tags"] = [selected_mood]
+
+    dataset["tags"] = dataset["tags"].apply(lambda x: x[0])  # Expand list with one element to string.
+
+    return dataset, mood_pairs
+
+def main(outputs_path, config_path):
+    # Load dataset and read cli arguments.
     dataset_path, moods_merge_mode = cli_arguments_preprocess()
+    dataset_source_name = "autotagging_moodtheme.tsv"
 
-    if not os.path.exists(OUTPUTS_PATH):
-        os.mkdir(OUTPUTS_PATH)
+    if not os.path.exists(outputs_path):
+        os.mkdir(outputs_path)
 
-    dataset = load_dataset(dataset_path)
+    dataset = load_dataset(os.path.join(dataset_path, dataset_source_name))
     
     if dataset is not None and not dataset.empty:
+        # Clean dataset.
         print(f"Dataset loaded successfully with {len(dataset)} rows and {len(dataset.columns)} columns.")
         print(dataset.head(n=10), "\n")
 
@@ -144,22 +225,37 @@ def main(outputs_path):
         print(cleaned_dataset.head(n=10), "\n")
         cleaned_dataset.info()
 
-        tags_distribution_save_path = os.path.join(OUTPUTS_PATH, "tags_distribution.csv")
+        # Get target tags distribution (for next merging).
+        tags_distribution_save_path = os.path.join(outputs_path, "tags_distribution.csv")
         tags_distribution = cleaned_dataset["tags"].explode().value_counts()
         tags_distribution.to_csv(tags_distribution_save_path, index=True)
-        print("Tags distribution saved successfully. Path: ", tags_distribution_save_path)
+        print(f"Tags distribution saved successfully. Path: {tags_distribution_save_path}\n")
 
+        # If user defined moods mode as "all" then script should just save the cleaned data.
         if moods_merge_mode == 0:
             save_path = os.path.join(dataset_path, "dataset_all_moods.tsv")
             cleaned_dataset.to_csv(save_path, sep="\t", index=False)
-            print("Dataset saved successfully. Path: ", save_path)
+            print("Cleaned dataset saved successfully. Path: ", save_path)
             return
 
-        final_dataset = merge_moods(cleaned_dataset, moods_merge_mode)
+        # Load config to merge moods.
+        with open(config_path) as file:
+            config = json.load(file)
 
-        if moods_merge_mode == 2:
-            save_path = os.path.join(dataset_path, "dataset_2_moods.tsv")
-            
+            save_path = os.path.join(dataset_path, f"dataset_{moods_merge_mode}_moods.tsv")
+            base_moods = config[f"mode_{moods_merge_mode}"]
+            ban_moods = config["ban_moods"]
+
+        # Merge moods in the dataset.
+        final_dataset, moods_pairs = merge_moods(cleaned_dataset, base_moods, ban_moods)
+
+        # Save moods pairs to json file.
+        moods_pairs_save_path = os.path.join(outputs_path, "moods_pairs.json")
+        with open(moods_pairs_save_path, "w", encoding="utf-8") as file:
+            json.dump(moods_pairs, file, indent=4)
+        print("Moods pairs saved successfully. Path: ", moods_pairs_save_path)
+
+        # Save final dataset.
         final_dataset.to_csv(save_path, sep="\t", index=False)
         print("Dataset saved successfully. Path: ", save_path)
     else:
@@ -167,5 +263,4 @@ def main(outputs_path):
 
 
 if __name__ == "__main__":
-    main(outputs_path=OUTPUTS_PATH)
-
+    main(outputs_path=OUTPUTS_PATH, config_path=CONFIG_PATH)
