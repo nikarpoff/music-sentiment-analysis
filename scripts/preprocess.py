@@ -38,7 +38,7 @@ def cli_arguments_preprocess() -> tuple:
                       help="Path to source dataset")
     
     parser.add_argument("--moods", required=False,
-                      choices=["2", "4", "all"],
+                      choices=["2", "4", "8", "all"],
                       help="Number of aggregated moods. By default: all source moods")
 
     args = parser.parse_args()
@@ -175,6 +175,11 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
     moods_conformity = {}
 
     for mood in non_basic_moods:
+        # Skip banned moods.
+        if mood in ban_moods:
+            moods_conformity[mood] = None
+            continue
+
         pairs_counts = {}
 
         for basic_mood in mood_pairs.keys():
@@ -182,8 +187,10 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
             if mood in mood_pairs[basic_mood]:
                 pairs_counts[basic_mood] = mood_pairs[basic_mood][mood]
 
+        # Choose the most popular neighbour basic mood from the pairs counts.
         selected_mood = max(pairs_counts, key=pairs_counts.get) if pairs_counts else None
         
+        # Remember conformity.
         if selected_mood is not None:
             moods_conformity[mood] = selected_mood
         else:
@@ -193,20 +200,20 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
     for i, row in dataset.iterrows():
         tags = row["tags"]
 
-        # In this case we have single baned mood.
-        if len(tags) == 0:
-            continue
-
         # In this case we have already merged moods in the dataset.
         if tags[0] in basic_moods:
             continue
 
         # Now we can start merge other moods.
+        tags_to_remove = []
         for tag in tags:
             if moods_conformity[tag] is not None:
                 tags[tags.index(tag)] = moods_conformity[tag]
             else:
-                tags.remove(tag)
+                tags_to_remove.append(tag)
+        
+        for tag in tags_to_remove:
+            tags.remove(tag)
 
         # Now select the most popular mood in the tags list.
         if len(tags) == 0 or len(tags) == 1:
@@ -216,7 +223,9 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
         selected_mood = max(counter, key=counter.get)
         dataset.loc[i, "tags"] = [selected_mood]
 
-    dataset["tags"] = dataset["tags"].apply(lambda x: x[0])  # Expand list with one element to string.
+    # Remove rows with empty tags and transform the tags-array with only one element into a string 
+    # (it is guaranteed that tags contain only single-element arrays).
+    dataset = dataset[dataset["tags"].apply(lambda x: len(x) > 0)].assign(tags=lambda df: df["tags"].str[0])
 
     return dataset, mood_pairs, moods_conformity
 
@@ -260,7 +269,7 @@ def main(outputs_path, config_path):
 
             save_path = os.path.join(dataset_path, f"dataset_{moods_merge_mode}_moods.tsv")
             base_moods = config[f"mode_{moods_merge_mode}"]
-            ban_moods = config["ban_list"]
+            ban_moods = config[f"ban_list_{moods_merge_mode}"]
 
         # Merge moods in the dataset.
         final_dataset, moods_pairs, moods_conformity = merge_moods(cleaned_dataset, base_moods, ban_moods)
@@ -271,11 +280,18 @@ def main(outputs_path, config_path):
 
         with open(moods_pairs_save_path, "w", encoding="utf-8") as file:
             json.dump(moods_pairs, file, indent=4)
+        print("Moods pairs saved successfully to the output directory.")
         
         with open(moods_conformity_save_path, "w", encoding="utf-8") as file:
             json.dump(moods_conformity, file, indent=4)
+        print("Moods conformity saved successfully to the output directory.\n")
 
-        print("Moods pairs saved successfully. Path: ", moods_pairs_save_path)
+        print(f"Final dataset has {len(final_dataset)} rows and {len(final_dataset.columns)} columns.\n")
+        print(final_dataset.head(n=10), "\n")
+        final_dataset.info()
+
+        tags_distribution = final_dataset["tags"].value_counts()
+        print(f"\nTags distribution after merging moods:\n{tags_distribution}\n")
 
         # Save final dataset.
         final_dataset.to_csv(save_path, sep="\t", index=False)

@@ -2,5 +2,16 @@
     "mode_2": ["happy", "sad"],
     "mode_4": ["happy", "sad", "energetic", "relaxing"],
     "mode_8": ["happy", "sad", "energetic", "relaxing", "romantic", "inspiring", "melodic", "meditative"],
-    "ban_list": []
+
+    "ban_list_2": ["film", "melodic", "epic", "love", "advertising", "deep", "romantic", "documentary", "corporate", "background",
+                "soundscape", "soft", "ambiental", "adventure", "upbeat", "commercial", "movie", "action", "trailer", "game",
+                "nature", "cool", "powerful", "hopeful", "travel", "horror", "heavy", "sexy", "mellow"],
+
+    "ban_list_4": ["film", "melodic", "love", "advertising", "deep", "romantic", "documentary", "corporate", "background",
+                "soundscape", "adventure", "upbeat", "commercial", "movie", "trailer", "game",
+                "nature", "cool", "hopeful", "travel", "horror", "sexy", "mellow"],
+
+    "ban_list_8": ["film", "melodic", "advertising", "deep", "documentary", "corporate", "background",
+                "soundscape", "adventure", "upbeat", "commercial", "movie", "trailer", "game",
+                "nature", "cool", "hopeful", "travel", "horror", "mellow"]
 }
