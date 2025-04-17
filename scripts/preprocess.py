@@ -129,10 +129,10 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
     
     Each unpopular mood merges with the basic mood that most often stands in pairs with it. 
     """
-    mood_pairs = {}
+    mood_pairs = {}  # Set of basic moods sets of them pairs with pairs counts.
 
     for basic_mood in basic_moods:
-        mood_pairs[basic_mood] = []
+        mood_pairs[basic_mood] = {}
 
     # Counting cycle to determine mood pairs.
     for i, row in dataset.iterrows():
@@ -152,14 +152,11 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
         # There is basic mood in tags, so we can build mood pairs.
         for tag in tags:
             if tag != current_basic_mood:
-                # Find the index of the set containing the key tag in the array of sets mood_pairs[current_basic_mood]
-                index = next((i for i, pair in enumerate(mood_pairs[current_basic_mood]) if tag in pair), None)
-
-                # If tag is not in basic moods list, we can add it to the list with count 1. Else -> increase count by 1.
-                if index is None:
-                    mood_pairs[current_basic_mood].append({tag: 1})
+                # If tag is not in basic moods set, we can add it to the set with count 1. Else -> increase count by 1.
+                if tag in mood_pairs[current_basic_mood]:
+                    mood_pairs[current_basic_mood][tag] += 1
                 else:
-                    mood_pairs[current_basic_mood][index][tag] += 1
+                    mood_pairs[current_basic_mood][tag] = 1
         
         # Finally, replace current tag with basic mood.
         dataset.loc[i, "tags"] = [current_basic_mood]
@@ -180,10 +177,9 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
             pairs_counts = {}
 
             for basic_mood in mood_pairs.keys():
-                index = next((i for i, pair in enumerate(mood_pairs[basic_mood]) if tag in pair), None)
-
-                if index is not None:
-                    pairs_counts[basic_mood] = mood_pairs[basic_mood][index][tag]
+                # Remember pairs counts if tag was paired with basic mood.
+                if tag in mood_pairs[basic_mood]:
+                    pairs_counts[basic_mood] = mood_pairs[basic_mood][tag]
             
             selected_mood = max(pairs_counts, key=pairs_counts.get) if pairs_counts else None
 
@@ -244,7 +240,7 @@ def main(outputs_path, config_path):
 
             save_path = os.path.join(dataset_path, f"dataset_{moods_merge_mode}_moods.tsv")
             base_moods = config[f"mode_{moods_merge_mode}"]
-            ban_moods = config["ban_moods"]
+            ban_moods = config["ban_list"]
 
         # Merge moods in the dataset.
         final_dataset, moods_pairs = merge_moods(cleaned_dataset, base_moods, ban_moods)
