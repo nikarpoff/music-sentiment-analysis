@@ -18,6 +18,7 @@ import json
 import pandas as pd
 from argparse import ArgumentParser
 from collections import Counter
+from exceptions.exceptions import InvalidConfigException
 
 OUTPUTS_PATH = os.path.abspath("./outputs")
 CONFIG_PATH = os.path.abspath("./config/moods.json")
@@ -128,11 +129,20 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
     Merges moods tags in several basic moods.
     
     Each unpopular mood merges with the basic mood that most often stands in pairs with it. 
+    Removes ban moods from the tags. If the tag can't be merged with any basic mood, row will be removed from the dataset.
     """
     mood_pairs = {}  # Set of basic moods sets of them pairs with pairs counts.
+    non_basic_moods = set(dataset["tags"].explode().unique())  # Set of non basic moods.
 
     for basic_mood in basic_moods:
+        if basic_mood not in non_basic_moods:
+            raise InvalidConfigException(f"Basic mood {basic_mood} from config not found in dataset. Please check the config file.")
+        
+        if basic_mood in ban_moods:
+            raise InvalidConfigException(f"Basic mood {basic_mood} found in ban list {ban_moods}. Please check the config file.")
+
         mood_pairs[basic_mood] = {}
+        non_basic_moods.remove(basic_mood)
 
     # Counting cycle to determine mood pairs.
     for i, row in dataset.iterrows():
@@ -161,9 +171,31 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
         # Finally, replace current tag with basic mood.
         dataset.loc[i, "tags"] = [current_basic_mood]
     
+    # Count the most popular neighbour mood for each non basic mood.
+    moods_conformity = {}
+
+    for mood in non_basic_moods:
+        pairs_counts = {}
+
+        for basic_mood in mood_pairs.keys():
+            # Remember pairs counts if tag was paired with basic mood.
+            if mood in mood_pairs[basic_mood]:
+                pairs_counts[basic_mood] = mood_pairs[basic_mood][mood]
+
+        selected_mood = max(pairs_counts, key=pairs_counts.get) if pairs_counts else None
+        
+        if selected_mood is not None:
+            moods_conformity[mood] = selected_mood
+        else:
+            moods_conformity[mood] = None
+
     # Merging cycle to merge moods.
     for i, row in dataset.iterrows():
         tags = row["tags"]
+
+        # In this case we have single baned mood.
+        if len(tags) == 0:
+            continue
 
         # In this case we have already merged moods in the dataset.
         if tags[0] in basic_moods:
@@ -171,25 +203,13 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
 
         # Now we can start merge other moods.
         for tag in tags:
-            if tag in basic_moods:
-                continue
-            
-            pairs_counts = {}
-
-            for basic_mood in mood_pairs.keys():
-                # Remember pairs counts if tag was paired with basic mood.
-                if tag in mood_pairs[basic_mood]:
-                    pairs_counts[basic_mood] = mood_pairs[basic_mood][tag]
-            
-            selected_mood = max(pairs_counts, key=pairs_counts.get) if pairs_counts else None
-
-            if selected_mood is not None:
-                tags[tags.index(tag)] = selected_mood
+            if moods_conformity[tag] is not None:
+                tags[tags.index(tag)] = moods_conformity[tag]
             else:
                 tags.remove(tag)
 
         # Now select the most popular mood in the tags list.
-        if len(tags) == 0:
+        if len(tags) == 0 or len(tags) == 1:
             continue
 
         counter = Counter(tags)
@@ -198,7 +218,7 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
 
     dataset["tags"] = dataset["tags"].apply(lambda x: x[0])  # Expand list with one element to string.
 
-    return dataset, mood_pairs
+    return dataset, mood_pairs, moods_conformity
 
 def main(outputs_path, config_path):
     # Load dataset and read cli arguments.
@@ -243,12 +263,18 @@ def main(outputs_path, config_path):
             ban_moods = config["ban_list"]
 
         # Merge moods in the dataset.
-        final_dataset, moods_pairs = merge_moods(cleaned_dataset, base_moods, ban_moods)
+        final_dataset, moods_pairs, moods_conformity = merge_moods(cleaned_dataset, base_moods, ban_moods)
 
         # Save moods pairs to json file.
-        moods_pairs_save_path = os.path.join(outputs_path, "moods_pairs.json")
+        moods_pairs_save_path = os.path.join(outputs_path, f"moods_pairs_{moods_merge_mode}.json")
+        moods_conformity_save_path = os.path.join(outputs_path, f"moods_conformity_{moods_merge_mode}.json")
+
         with open(moods_pairs_save_path, "w", encoding="utf-8") as file:
             json.dump(moods_pairs, file, indent=4)
+        
+        with open(moods_conformity_save_path, "w", encoding="utf-8") as file:
+            json.dump(moods_conformity, file, indent=4)
+
         print("Moods pairs saved successfully. Path: ", moods_pairs_save_path)
 
         # Save final dataset.
