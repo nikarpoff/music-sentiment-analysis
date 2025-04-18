@@ -16,12 +16,10 @@
 import os
 import json
 import pandas as pd
-from argparse import ArgumentParser
+from dotenv import load_dotenv
 from collections import Counter
+from argparse import ArgumentParser
 from exceptions.exceptions import InvalidConfigException
-
-OUTPUTS_PATH = os.path.abspath("./outputs")
-CONFIG_PATH = os.path.abspath("./config/moods.json")
 
 
 def cli_arguments_preprocess() -> tuple:
@@ -229,14 +227,19 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
 
     return dataset, mood_pairs, moods_conformity
 
-def main(outputs_path, config_path):
+def main():
     # Load dataset and read cli arguments.
     dataset_path, moods_merge_mode = cli_arguments_preprocess()
-    dataset_source_name = "autotagging_moodtheme.tsv"
 
+    # Get required info from environment variables.
+    dataset_source_name = os.getenv("SOURCE_DATASET_NAME")
+    config_path = os.getenv("CONFIG_PATH")
+    outputs_path = os.getenv("OUTPUTS_PATH")
+    
     if not os.path.exists(outputs_path):
         os.mkdir(outputs_path)
 
+    # Load dataset.
     dataset = load_dataset(os.path.join(dataset_path, dataset_source_name))
     
     if dataset is not None and not dataset.empty:
@@ -264,7 +267,7 @@ def main(outputs_path, config_path):
             return
 
         # Load config to merge moods.
-        with open(config_path) as file:
+        with open(os.path.join(config_path, "moods.json")) as file:
             config = json.load(file)
 
             save_path = os.path.join(dataset_path, f"dataset_{moods_merge_mode}_moods.tsv")
@@ -301,4 +304,4 @@ def main(outputs_path, config_path):
 
 
 if __name__ == "__main__":
-    main(outputs_path=OUTPUTS_PATH, config_path=CONFIG_PATH)
+    main()
