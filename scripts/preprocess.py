@@ -26,6 +26,7 @@ def cli_arguments_preprocess() -> tuple:
     """
     Read, parse and preprocess command line arguments:
         - path to source dataset. Required
+        - path to mel spectrograms. Should be related to dataset path. By default: "melspecs/"
         - number of moods. By default: all moods (0)
 
     Sorce dataset file should be named "autotagging_moodtheme.tsv"
@@ -34,6 +35,9 @@ def cli_arguments_preprocess() -> tuple:
 
     parser.add_argument("--path", required=True,
                       help="Path to source dataset")
+    
+    parser.add_argument("--mels", required=False,
+                      help="Path to mel spectrograms. Should be related to the dataset path. By default: 'melspecs/'")
     
     parser.add_argument("--moods", required=False,
                       choices=["2", "4", "8", "all"],
@@ -44,10 +48,13 @@ def cli_arguments_preprocess() -> tuple:
     if args.path[-1] != "/":
         args.path += "/"
 
+    if args.mels is None:
+        args.mels = "melspecs/"
+
     if not args.moods or args.moods == "all":
         args.moods = 0
 
-    return os.path.abspath(args.path), args.moods
+    return os.path.abspath(args.path), args.mels, args.moods
 
 def load_dataset(dataset_path: str) -> pd.DataFrame:
     """
@@ -110,6 +117,15 @@ def clean_id_columns(df: pd.DataFrame) -> pd.DataFrame:
     df[artist_id_column] = pd.to_numeric(df[artist_id_column])
     df[album_id_column] = pd.to_numeric(df[album_id_column])
 
+    return df
+
+def add_mel_spec_path(df: pd.DataFrame, melspecs_rel_path: str) -> pd.DataFrame:
+    """
+    Adds the mel spectrograms path to the DataFrame.
+    """
+    # Add the mel spectrograms path to the DataFrame and reorder columns
+    df.insert(df.columns.get_loc("path") + 1, "mel_spec_path", 
+              df["path"].apply(lambda x: os.path.join(melspecs_rel_path, x.replace(".mp3", ".npy"))))
     return df
 
 def clean_dataset_pipeline(dataset: pd.DataFrame) -> pd.DataFrame:
@@ -228,14 +244,15 @@ def merge_moods(dataset: pd.DataFrame, basic_moods: list, ban_moods: list) -> tu
     return dataset, mood_pairs, moods_conformity
 
 def main():
-    # Load dataset and read cli arguments.
-    dataset_path, moods_merge_mode = cli_arguments_preprocess()
+    # Load dataset, environment and read cli arguments.
+    dataset_path, melspecs_rel_path, moods_merge_mode = cli_arguments_preprocess()
+    load_dotenv()
 
     # Get required info from environment variables.
     dataset_source_name = os.getenv("SOURCE_DATASET_NAME")
     config_path = os.getenv("CONFIG_PATH")
     outputs_path = os.getenv("OUTPUTS_PATH")
-    
+
     if not os.path.exists(outputs_path):
         os.mkdir(outputs_path)
 
@@ -245,13 +262,17 @@ def main():
     if dataset is not None and not dataset.empty:
         # Clean dataset.
         print(f"Dataset loaded successfully with {len(dataset)} rows and {len(dataset.columns)} columns.")
-        print(dataset.head(n=10), "\n")
+        print(dataset.head(n=3), "\n")
 
         cleaned_dataset = clean_dataset_pipeline(dataset)
 
         print("Dataset cleaned successfully:")
-        print(cleaned_dataset.head(n=10), "\n")
+        print(cleaned_dataset.head(n=3), "\n")
         cleaned_dataset.info()
+
+        print("Add mel spectrograms path to the dataset.")
+        cleaned_dataset = add_mel_spec_path(cleaned_dataset, melspecs_rel_path)
+        print(cleaned_dataset.head(n=3), "\n")
 
         # Get target tags distribution (for next merging).
         tags_distribution_save_path = os.path.join(outputs_path, "tags_distribution.csv")
