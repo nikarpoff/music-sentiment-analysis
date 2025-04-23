@@ -20,7 +20,7 @@ from random import randint
 from os import path as os_path
 
 from torch import from_numpy
-from torch import long as torch_long
+from torch import float as torch_float
 from torch import tensor as torch_tensor
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.functional import pad as torch_pad
@@ -45,20 +45,19 @@ def multi_label_binarize(labels: pd.Series) -> pd.Series:
     binarized_labels = encoder.fit_transform(labels)
     return binarized_labels
 
-def load_specs_dataset(dataset_path: str, dataset_name: str, target_mode: str, seq_len=1024, val_size=0.2,
+def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode: str, seq_len=1024, val_size=0.2,
                        test_size=0.2, batch_size=32, num_workers=8, random_state=None) -> tuple:
     x_train, y_train, x_val, y_val, x_test, y_test = _load_dataset(dataset_path, dataset_name, target_mode=target_mode,
                                                               val_size=val_size, test_size=test_size, random_state=random_state)
     
     def _get_specs_loader(x, y, dataset_path):
-        dataset = MelspecsDataset(x, y, dataset_path=dataset_path, seq_len=seq_len)
+        dataset = MelspecsDataset(x, y, device=device, dataset_path=dataset_path, seq_len=seq_len)
 
         return DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,  # number of subprocesses to use for data loading
-            pin_memory=True,          # optimize memory transfer to GPU
             prefetch_factor=2,        # how many batches to prefetch
             persistent_workers=True   # continue to use the same workers
         )
@@ -89,12 +88,13 @@ def _load_dataset(dataset_path: str, dataset_name: str, target_mode: str, val_si
 
 
 class MelspecsDataset(Dataset):
-    def __init__(self, x, y, dataset_path, seq_len, transform_specs=None):
+    def __init__(self, x, y, device, dataset_path, seq_len, transform_specs=None):
         self.x = x
         self.y = y
         self.dataset_path = dataset_path
         self.seq_len = seq_len
         self.transform_specs = transform_specs
+        self.device = device
 
     def __len__(self):
         return len(self.x)
@@ -103,7 +103,7 @@ class MelspecsDataset(Dataset):
         row = self.x.iloc[idx]
 
         spec = np.load(os_path.join(self.dataset_path, row['melspecs_path']))
-        spec = from_numpy(spec).float()  # size (num_mels, num_frames<=seq_len>)
+        spec = from_numpy(spec).float().to(self.device)  # size (num_mels, num_frames<=seq_len>)
 
         # Apply transformation to the mel spectrogram if specified
         if self.transform_specs:
@@ -120,5 +120,5 @@ class MelspecsDataset(Dataset):
 
         spec = spec.permute(1, 0)  # transpose to (batch, sequence, feature)
 
-        label = torch_tensor(self.y.iloc[idx], dtype=torch_long)
+        label = torch_tensor(self.y.iloc[idx], dtype=torch_float).to(self.device)  # size (num_classes,)
         return spec, label

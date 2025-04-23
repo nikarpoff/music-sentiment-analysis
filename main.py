@@ -14,11 +14,16 @@
 
 
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
+
+from torch import device as torch_device
+from torch.cuda import is_available as is_cuda_available
 from dotenv import load_dotenv
 
 from argparse import ArgumentParser
 from model.data import load_specs_dataset
 from model.specstr import SpectrogramTransformer
+from model.utils import train_model, evaluate_model
 
 
 def cli_arguments_preprocess() -> str:
@@ -70,8 +75,18 @@ if __name__ == "__main__":
 
     # Set the dataset name based on the moods number.
     dataset_name = "dataset_all_moods.tsv" if moods_number == 0 else f"dataset_{moods_number}_moods.tsv"
-    target_mode = "multi_label" if moods_number == 0 else "one_hot"
     output_dim = total_moods if moods_number == 0 else moods_number
+    device = torch_device("cuda" if is_cuda_available() else "cpu")
+
+    # Select the target transformation based on the target mode.
+    if moods_number == 0:
+        output_activation = "sigmoid"
+        target_mode = "multi_label"
+        loss = "binary_cross_entropy_with_logits"
+    else:
+        output_activation = "softmax"
+        target_mode = "one_hot"
+        loss = "cross_entropy"
 
     if model_type == "specstr":
         d_model = int(os.getenv("SPECSTR_D_MODEL", 512))
@@ -80,18 +95,17 @@ if __name__ == "__main__":
         seq_len = int(os.getenv("SPECSTR_SEQ_LEN", 1024))
 
         # Load the dataset.
-        train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, target_mode, seq_len=seq_len,
+        train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, device, target_mode, seq_len=seq_len,
                                                                    val_size=0.2, test_size=0.2, random_state=7)
 
         model = SpectrogramTransformer(d_model=d_model, output_dim=output_dim,
                                        nhead=nhead, num_layers=num_layers,
-                                       seq_len=seq_len, target_mode=target_mode)
-        model.build_model()
+                                       output_activation=output_activation, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
     if task_type == "train":
-        model.train(train_loader, val_loader, lr=learning_rate, epochs=epochs, l2_reg=l2_reg)
+        train_model(model, loss, train_loader, val_loader, lr=learning_rate, epochs=epochs, l2_reg=l2_reg)
     elif task_type == "test":
         pass
     else:
