@@ -119,12 +119,12 @@ def clean_id_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def add_mel_spec_path(df: pd.DataFrame, melspecs_rel_path: str) -> pd.DataFrame:
+def add_melspecs_path(df: pd.DataFrame, melspecs_rel_path: str) -> pd.DataFrame:
     """
     Adds the mel spectrograms path to the DataFrame.
     """
     # Add the mel spectrograms path to the DataFrame and reorder columns
-    df.insert(df.columns.get_loc("path") + 1, "mel_spec_path", 
+    df.insert(df.columns.get_loc("path") + 1, "melspecs_path", 
               df["path"].apply(lambda x: os.path.join(melspecs_rel_path, x.replace(".mp3", ".npy"))))
     return df
 
@@ -271,7 +271,7 @@ def main():
         cleaned_dataset.info()
 
         print("Add mel spectrograms path to the dataset.")
-        cleaned_dataset = add_mel_spec_path(cleaned_dataset, melspecs_rel_path)
+        cleaned_dataset = add_melspecs_path(cleaned_dataset, melspecs_rel_path)
         print(cleaned_dataset.head(n=3), "\n")
 
         # Get target tags distribution (for next merging).

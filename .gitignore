@@ -1,5 +1,6 @@
 # Outputs of sctipts
 outputs/
+runs/
 
 # VS Code
 .vscode/
