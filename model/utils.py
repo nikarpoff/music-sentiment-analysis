@@ -46,7 +46,7 @@ def train_one_epoch(model, loss_function, loader, total_batches, epoch, tb_write
 
     return last_loss
 
-def train_model(model, loss_name, train_loader, val_loader, lr, epochs, l2_reg):
+def train_model(model, save_path, loss_name, train_loader, val_loader, lr, epochs, l2_reg):
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=l2_reg)
 
     if loss_name == "cross_entropy":
@@ -81,6 +81,14 @@ def train_model(model, loss_name, train_loader, val_loader, lr, epochs, l2_reg):
         if running_vloss < best_vloss:
             best_vloss = running_vloss
         
+        # Save checkpoint.
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': loss_function
+        }, save_path)
+
         # Log loss.
         print(f"Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss}; Validation loss: {running_vloss}")
 

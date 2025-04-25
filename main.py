@@ -67,6 +67,19 @@ if __name__ == "__main__":
 
     # Load environment variables.
     load_dotenv()
+    outputs_path = str(os.getenv("OUTPUTS_PATH", "./outputs/"))
+    models_path = str(os.getenv("MODELS_PATH", "./outputs/models/"))
+    save_path = str(os.getenv(f"{model_type.upper()}_SAVE_PATH", "./outputs/models/"))
+    
+    if not os.path.isdir(outputs_path):
+        os.mkdir(outputs_path)
+    
+    if not os.path.isdir(models_path):
+        os.mkdir(models_path)
+    
+    if not os.path.isdir(save_path):
+        os.mkdir(save_path)
+
     learning_rate = float(os.getenv(f"{model_type.upper()}_LEARNING_RATE", 0.001))
     batch_size = int(os.getenv(f"{model_type.upper()}_BATCH_SIZE", 32))
     epochs = int(os.getenv(f"{model_type.upper()}_EPOCHS", 10))
@@ -105,7 +118,7 @@ if __name__ == "__main__":
         raise ValueError(f"Unknown model type: {model_type}")
 
     if task_type == "train":
-        train_model(model, loss, train_loader, val_loader, lr=learning_rate, epochs=epochs, l2_reg=l2_reg)
+        train_model(model, save_path, loss, train_loader, val_loader, lr=learning_rate, epochs=epochs, l2_reg=l2_reg)
     elif task_type == "test":
         pass
     else:
