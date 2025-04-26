@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch.nn
-from torch import no_grad
+import os
+import torch
 from datetime import datetime
 import torch.optim as optim
 from torch.utils.tensorboard.writer import SummaryWriter
@@ -39,7 +39,7 @@ def train_one_epoch(model, loss_function, loader, total_batches, epoch, tb_write
         # Report 10 times per epoch
         if i % report_interval == report_interval - 1:
             last_loss = running_loss / report_interval
-            print(f'\t batch [{i + 1}/{total_batches}] - train loss: {last_loss}')
+            print(f'\t batch [{i + 1}/{total_batches}] - train loss: {last_loss:.5f}')
             tb_x = epoch * len(loader) + i + 1
             tb_writer.add_scalar('Loss/train', last_loss, tb_x)
             running_loss = 0.
@@ -71,12 +71,15 @@ def train_model(model, save_path, loss_name, train_loader, val_loader, lr, epoch
         # Validation.
         model.eval()  # Set the model to evaluation mode
 
-        with no_grad():
-            for _, vdata in enumerate(val_loader):
+        with torch.no_grad():
+            for i, vdata in enumerate(val_loader):
+                print(i)
                 vinputs, vlabels = vdata
                 voutputs = model(vinputs)
                 vloss = loss_function(voutputs, vlabels)
                 running_vloss += vloss
+
+        writer.add_scalar('Loss/validation', running_vloss, epoch + 1)
 
         if running_vloss < best_vloss:
             best_vloss = running_vloss
@@ -85,12 +88,14 @@ def train_model(model, save_path, loss_name, train_loader, val_loader, lr, epoch
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss_function
-        }, save_path)
+            'optimizer_state_dict': optimizer.state_dict()
+        }, os.path.join(save_path, f"checkpoint_{timestamp}_epoch_{epoch + 1}.pth"))
 
         # Log loss.
-        print(f"Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss}; Validation loss: {running_vloss}")
+        print(f"Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss:.3f}; Validation loss: {running_vloss:.3f}")
+
+    writer.close()
+    torch.save(model.state_dict(), os.path.join(save_path, f"model_{timestamp}.pth"))
 
 def evaluate_model(model, loss_function, test_loader):
     pass
