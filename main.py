@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 from argparse import ArgumentParser
 from model.data import load_specs_dataset
-from model.specstr import SpectrogramTransformer
+from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer
 from model.utils import train_model, evaluate_model
 
 
@@ -40,7 +40,7 @@ def cli_arguments_preprocess() -> str:
                         help="Path to source dataset")
     
     parser.add_argument("--model", required=True,
-                        choices=["specstr"],
+                        choices=["pure_specstr", "prelearned_specstr", "specstr"],
                         help="Type of machine learning model to be used")
     
     parser.add_argument("--task", required=True,
@@ -101,19 +101,32 @@ if __name__ == "__main__":
         target_mode = "one_hot"
         loss = "cross_entropy"
 
+    # Load required dataset.
+    if model_type == "pure_specstr" or model_type == "prelearned_specstr" or model_type == "specstr":
+        seq_len = int(os.getenv("SPECS_SEQ_LEN", 1024))
+
+        # Load the dataset.
+        train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, device, target_mode,
+                                                                   val_size=0.2, test_size=0.2, random_state=7)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
     if model_type == "specstr":
         d_model = int(os.getenv("SPECSTR_D_MODEL", 512))
         nhead = int(os.getenv("SPECSTR_NHEAD", 32))
         num_layers = int(os.getenv("SPECSTR_NUM_LAYERS", 6))
-        seq_len = int(os.getenv("SPECSTR_SEQ_LEN", 1024))
-
-        # Load the dataset.
-        train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, device, target_mode, seq_len=seq_len,
-                                                                   val_size=0.2, test_size=0.2, random_state=7)
 
         model = SpectrogramTransformer(d_model=d_model, output_dim=output_dim,
-                                       nhead=nhead, num_layers=num_layers,
+                                       nhead=nhead, num_layers=num_layers, seq_len=seq_len,
                                        output_activation=output_activation, device=device).to(device)
+    elif model_type == "pure_specstr":
+        d_model = int(os.getenv("PURE_SPECSTR_D_MODEL", 512))
+        nhead = int(os.getenv("PURE_SPECSTR_NHEAD", 32))
+        num_layers = int(os.getenv("PURE_SPECSTR_NUM_LAYERS", 6))
+
+        model = SpectrogramPureTransformer(d_model=d_model, output_dim=output_dim,
+                                           nhead=nhead, num_layers=num_layers, seq_len=seq_len,
+                                           output_activation=output_activation, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

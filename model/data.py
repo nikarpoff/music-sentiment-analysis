@@ -16,14 +16,14 @@ import numpy as np
 import pandas as pd
 
 from ast import literal_eval
-from random import randint
 from os import path as os_path
 
+from torch import stack
 from torch import from_numpy
 from torch import float as torch_float
 from torch import tensor as torch_tensor
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
-from torch.nn.functional import pad as torch_pad
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, MultiLabelBinarizer
@@ -32,6 +32,8 @@ from sklearn.preprocessing import OneHotEncoder, MultiLabelBinarizer
 def one_hot_encode_labels(labels: pd.Series) -> pd.Series:
     """
     One-hot encode the labels.
+
+    This encoder used for 2/4/8-moods dataset.
     """
     encoder = OneHotEncoder()
     one_hot_labels = encoder.fit_transform(labels)
@@ -40,18 +42,34 @@ def one_hot_encode_labels(labels: pd.Series) -> pd.Series:
 def multi_label_binarize(labels: pd.Series) -> pd.Series:
     """
     Multi Label Binarization encode the labels.
+
+    This encoder used for all-moods dataset.
     """
     encoder = MultiLabelBinarizer()
     binarized_labels = encoder.fit_transform(labels)
     return binarized_labels
 
-def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode: str, seq_len=1024, val_size=0.2,
+def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode: str, val_size=0.2,
                        test_size=0.2, batch_size=32, num_workers=8, random_state=None) -> tuple:
+    """
+    Load the dataset and create DataLoader objects for training, validation, and testing.
+    :param dataset_path: Path to the dataset directory.
+    :param dataset_name: Name of the dataset file (depends on moods mode).
+    :param device: Device to load the data on ('cuda' or 'cpu').
+    :param target_mode: Target mode for the labels ('multi_label' or 'one_hot'). Multi-label is used for all-moods dataset.
+    :param val_size: Proportion of the dataset to include in the validation split.
+    :param test_size: Proportion of the dataset to include in the test split.
+    :param batch_size: Batch size for the DataLoader.
+    :param num_workers: Number of subprocesses to use for data loading.
+    :param random_state: Random seed for reproducibility.
+
+    :return: tuple of DataLoader objects for training, validation, and testing.
+    """
     x_train, y_train, x_val, y_val, x_test, y_test = _load_dataset(dataset_path, dataset_name, target_mode=target_mode,
                                                               val_size=val_size, test_size=test_size, random_state=random_state)
     
     def _get_specs_loader(x, y, dataset_path):
-        dataset = MelspecsDataset(x, y, device=device, dataset_path=dataset_path, seq_len=seq_len)
+        dataset = MelspecsDataset(x, y, device=device, dataset_path=dataset_path)
 
         return DataLoader(
             dataset,
@@ -59,7 +77,8 @@ def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode
             shuffle=True,
             num_workers=num_workers,  # number of subprocesses to use for data loading
             prefetch_factor=2,        # how many batches to prefetch
-            persistent_workers=True   # continue to use the same workers
+            persistent_workers=True,  # continue to use the same workers
+            collate_fn=melspecs_collate_fn,
         )
 
     train_loader = _get_specs_loader(x_train, y_train, dataset_path)
@@ -69,6 +88,9 @@ def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode
     return train_loader, val_loader, test_loader
 
 def _load_dataset(dataset_path: str, dataset_name: str, target_mode: str, val_size=0.2, test_size=0.2, random_state=None) -> tuple:
+    """
+    Service function for loading and spliting .tsv dataset
+    """
     # Select the target transformation based on the target mode.
     if target_mode == "multi_label":
         transform_target = multi_label_binarize
@@ -86,13 +108,29 @@ def _load_dataset(dataset_path: str, dataset_name: str, target_mode: str, val_si
 
     return x_train, y_train, x_val, y_val, x_test, y_test
 
+def melspecs_collate_fn(batch):
+    """
+    Custom collaction function with padding to maximum sequence length inside the batch
+    """
+    xs, ys = zip(*batch)
+    xs = [x.permute(1, 0) for x in xs]  
+
+    # Padding by maximum seq_len.
+    xs_padded = pad_sequence(xs, batch_first=True, padding_value=0.)
+
+    # Return initial dimensions order (batch, channel, time)
+    xs_padded = xs_padded.permute(0, 2, 1)
+
+    return xs_padded, ys
 
 class MelspecsDataset(Dataset):
-    def __init__(self, x, y, device, dataset_path, seq_len, transform_specs=None):
+    """
+    Loader of mel-spectrograms dataset.
+    """
+    def __init__(self, x, y, device, dataset_path, transform_specs=None):
         self.x = x
         self.y = y
         self.dataset_path = dataset_path
-        self.seq_len = seq_len
         self.transform_specs = transform_specs
         self.device = device
 
@@ -108,17 +146,6 @@ class MelspecsDataset(Dataset):
         # Apply transformation to the mel spectrogram if specified
         if self.transform_specs:
             spec = self.transform_specs(spec)
-
-        spec_len = spec.size(1)
-
-        if spec_len >= self.seq_len:
-            start = randint(0, spec_len - self.seq_len)
-            spec = spec[:, start:start + self.seq_len]
-        else:
-            pad = self.seq_len - spec_len
-            spec = torch_pad(spec, (0, pad), mode='constant', value=0.)
-
-        spec = spec.permute(1, 0)  # transpose to (batch, sequence, feature)
 
         label = torch_tensor(self.y.iloc[idx], dtype=torch_float).to(self.device)  # size (num_classes,)
         return spec, label
