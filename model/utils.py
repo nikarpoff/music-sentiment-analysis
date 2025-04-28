@@ -26,6 +26,9 @@ def train_one_epoch(model, loss_function, loader, total_batches, epoch, tb_write
 
     for i, data in enumerate(loader):
         inputs, labels = data
+        inputs = inputs.to(model.device, non_blocking=True)
+        labels = labels.to(model.device, non_blocking=True)
+
         optimizer.zero_grad()
 
         outputs = model(inputs)
@@ -59,6 +62,7 @@ def train_model(model, save_path, loss_name, train_loader, val_loader, lr, epoch
 
     best_vloss = float('inf')
     total_batches = len(train_loader)
+    val_len = len(val_loader)
 
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
@@ -73,16 +77,19 @@ def train_model(model, save_path, loss_name, train_loader, val_loader, lr, epoch
 
         with torch.no_grad():
             for i, vdata in enumerate(val_loader):
-                print(i)
                 vinputs, vlabels = vdata
+                vinputs = vinputs.to(model.device, non_blocking=True)
+                vlabels = vlabels.to(model.device, non_blocking=True)
+
                 voutputs = model(vinputs)
                 vloss = loss_function(voutputs, vlabels)
                 running_vloss += vloss
+        
+        val_avg_loss = running_vloss / val_len
+        writer.add_scalar('Loss/validation', val_avg_loss, epoch + 1)
 
-        writer.add_scalar('Loss/validation', running_vloss, epoch + 1)
-
-        if running_vloss < best_vloss:
-            best_vloss = running_vloss
+        if val_avg_loss < best_vloss:
+            best_vloss = val_avg_loss
         
         # Save checkpoint.
         torch.save({
@@ -92,7 +99,8 @@ def train_model(model, save_path, loss_name, train_loader, val_loader, lr, epoch
         }, os.path.join(save_path, f"checkpoint_{timestamp}_epoch_{epoch + 1}.pth"))
 
         # Log loss.
-        print(f"Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss:.3f}; Validation loss: {running_vloss:.3f}")
+        print(f"Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss:.3f}; Validation loss: {val_avg_loss:.3f}. Best validation loss: {best_vloss:.3f}")
+        torch.cuda.empty_cache()
 
     writer.close()
     torch.save(model.state_dict(), os.path.join(save_path, f"model_{timestamp}.pth"))

@@ -16,11 +16,14 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
 
+import json
+import numpy as np
 from torch import device as torch_device
 from torch.cuda import is_available as is_cuda_available
 from dotenv import load_dotenv
 
 from argparse import ArgumentParser
+from sklearn.preprocessing import MinMaxScaler
 from model.data import load_specs_dataset
 from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer
 from model.utils import train_model, evaluate_model
@@ -59,7 +62,37 @@ def cli_arguments_preprocess() -> str:
     if not args.moods or args.moods == "all":
         args.moods = 0
 
-    return os.path.abspath(args.path), args.model, args.task, args.moods
+    return os.path.abspath(args.path), args.model, args.task, int(args.moods)
+
+def get_specs_scaler(melspecs_stats_path, seq_len) -> MinMaxScaler:
+    """
+    Loads MinMaxScaler for mel-spectrograms transform
+    """
+    if os.path.isfile(melspecs_stats_path):
+        with open(melspecs_stats_path) as file:
+            stats = json.load(file)
+
+            min_amplitude = stats["max_amplitude"]
+            max_amplitude = stats["min_amplitude"]
+    else:
+        print("Warning! For MinMaxScaler max/min amplitudes from melspecs_stats.json required! Now using min/max defaults values.")
+        print("You can run scripts.stats to get required statistics and avoid this warning.")
+        
+        min_amplitude = -90.
+        max_amplitude = 29.6
+
+    # Average audio can have -90 min amplitude and +29.6 max amplitude. So melspecs should be scaled. 
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    # Cause fitting MinMaxScaler is too expencieve, params can be set manually
+    scaler.min_ = np.array([0])
+    scaler.scale_ = np.array([1 / (max_amplitude - min_amplitude)])
+    scaler.data_min_ = np.array([min_amplitude])
+    scaler.data_max_ = np.array([max_amplitude])
+    scaler.data_range_ = np.array([max_amplitude - min_amplitude])
+    scaler.n_features_in_ = seq_len
+
+    return scaler, min_amplitude, max_amplitude
+
 
 if __name__ == "__main__":
     # Read command line arguments.
@@ -103,27 +136,33 @@ if __name__ == "__main__":
 
     # Load required dataset.
     if model_type == "pure_specstr" or model_type == "prelearned_specstr" or model_type == "specstr":
-        seq_len = int(os.getenv("SPECS_SEQ_LEN", 1024))
+        seq_len = int(os.getenv(f"{model_type.upper()}_SEQ_LEN", 1024))
+        
+        d_model = int(os.getenv(f"{model_type.upper()}_D_MODEL", 512))
+        nhead = int(os.getenv(f"{model_type.upper()}_NHEAD", 32))
+        num_layers = int(os.getenv(f"{model_type.upper()}_NUM_LAYERS", 6))
+
+        # For MinMaxScaler max/min amplitudes required.
+        transform_specs, min_amp, _ = get_specs_scaler(os.path.join(outputs_path, "melspecs_stats.json"), seq_len)
 
         # Load the dataset.
         train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, device, target_mode,
-                                                                   val_size=0.2, test_size=0.2, random_state=7)
+                                                                   pad_value=min_amp, batch_size=batch_size, seq_len=seq_len,
+                                                                   num_workers=4, val_size=0.2, test_size=0.2,
+                                                                   transform_specs=transform_specs, random_state=7)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
     if model_type == "specstr":
-        d_model = int(os.getenv("SPECSTR_D_MODEL", 512))
-        nhead = int(os.getenv("SPECSTR_NHEAD", 32))
-        num_layers = int(os.getenv("SPECSTR_NUM_LAYERS", 6))
+        dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
+        cnn_units = int(os.getenv("SPECSTR_CNN_UNITS", 512))
+        rnn_units = int(os.getenv("SPECSTR_RNN_UNITS", 256))
 
-        model = SpectrogramTransformer(d_model=d_model, output_dim=output_dim,
+        model = SpectrogramTransformer(d_model=d_model, output_dim=output_dim, dropout=dropout,
+                                       cnn_units=cnn_units, rnn_units=rnn_units,
                                        nhead=nhead, num_layers=num_layers, seq_len=seq_len,
                                        output_activation=output_activation, device=device).to(device)
     elif model_type == "pure_specstr":
-        d_model = int(os.getenv("PURE_SPECSTR_D_MODEL", 512))
-        nhead = int(os.getenv("PURE_SPECSTR_NHEAD", 32))
-        num_layers = int(os.getenv("PURE_SPECSTR_NUM_LAYERS", 6))
-
         model = SpectrogramPureTransformer(d_model=d_model, output_dim=output_dim,
                                            nhead=nhead, num_layers=num_layers, seq_len=seq_len,
                                            output_activation=output_activation, device=device).to(device)
