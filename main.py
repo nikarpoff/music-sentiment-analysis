@@ -127,7 +127,7 @@ if __name__ == "__main__":
     if moods_number == 0:
         output_activation = "sigmoid"
         target_mode = "multi_label"
-        loss = "binary_cross_entropy_with_logits"
+        loss = "binary_cross_entropy"
     else:
         output_activation = "softmax"
         target_mode = "one_hot"
@@ -170,10 +170,13 @@ if __name__ == "__main__":
 
     if task_type == "train":
         print(f"Built model:\n", model)
-        train_model(model, model_type, save_path, loss, test_loader, val_loader, lr=learning_rate, epochs=epochs, l2_reg=l2_reg)
+        train_model(model, model_name=model_type, num_classes=output_dim, save_path=save_path,
+                    loss_name=loss, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
+                    epochs=epochs, l2_reg=l2_reg)
+        
     elif task_type == "test":
         model.load_state_dict(torch.load(os.path.join(save_path, "model_20250429_003616.pth"), weights_only=True))
         print(f"Loaded model:\n", model)
-        evaluate_model(model, loss_name=loss, test_loader=test_loader)
+        evaluate_model(model, num_classes=output_dim, loss_name=loss, test_loader=test_loader)
     else:
         raise ValueError(f"Unknown task type: {task_type}")
