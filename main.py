@@ -49,6 +49,8 @@ def cli_arguments_preprocess() -> str:
                         choices=["train", "test"],
                         help="Type of task to be performed")
     
+    parser.add_argument("mname", nargs="?", help="Model name for load and test (Required for task == test)")
+    
     parser.add_argument("--moods", required=False,
                       choices=["2", "4", "8", "all"],
                       help="Number of aggregated moods. By default: all source moods")
@@ -61,7 +63,10 @@ def cli_arguments_preprocess() -> str:
     if not args.moods or args.moods == "all":
         args.moods = 0
 
-    return os.path.abspath(args.path), args.model, args.task, int(args.moods)
+    if args.task == "test" and args.mname is None:
+        parser.error("For test model you must provide the name of saved model")
+
+    return os.path.abspath(args.path), args.model, args.mname, args.task, int(args.moods)
 
 def get_specs_scaler(melspecs_stats_path, seq_len) -> MinMaxScaler:
     """
@@ -95,7 +100,7 @@ def get_specs_scaler(melspecs_stats_path, seq_len) -> MinMaxScaler:
 
 if __name__ == "__main__":
     # Read command line arguments.
-    dataset_path, model_type, task_type, moods_number = cli_arguments_preprocess()
+    dataset_path, model_type, model_name, task_type, moods_number = cli_arguments_preprocess()
 
     # Load environment variables.
     load_dotenv()
@@ -125,13 +130,9 @@ if __name__ == "__main__":
 
     # Select the target transformation based on the target mode.
     if moods_number == 0:
-        output_activation = "sigmoid"
-        target_mode = "multi_label"
-        loss = "binary_cross_entropy"
+        target_mode = "multilabel"
     else:
-        output_activation = "softmax"
-        target_mode = "one_hot"
-        loss = "cross_entropy"
+        target_mode = "onehot"
 
     # Load required dataset.
     if model_type == "pure_specstr" or model_type == "prelearned_specstr" or model_type == "specstr":
@@ -159,24 +160,22 @@ if __name__ == "__main__":
 
         model = SpectrogramTransformer(d_model=d_model, output_dim=output_dim, dropout=dropout,
                                        cnn_units=cnn_units, rnn_units=rnn_units,
-                                       nhead=nhead, num_layers=num_layers, seq_len=seq_len,
-                                       output_activation=output_activation, device=device).to(device)
+                                       nhead=nhead, num_layers=num_layers, seq_len=seq_len, device=device).to(device)
     elif model_type == "pure_specstr":
-        model = SpectrogramPureTransformer(d_model=d_model, output_dim=output_dim,
-                                           nhead=nhead, num_layers=num_layers, seq_len=seq_len,
-                                           output_activation=output_activation, device=device).to(device)
+        model = SpectrogramPureTransformer(d_model=d_model, output_dim=output_dim, nhead=nhead, num_layers=num_layers,
+                                           seq_len=seq_len, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
     if task_type == "train":
         print(f"Built model:\n", model)
         train_model(model, model_name=model_type, num_classes=output_dim, save_path=save_path,
-                    loss_name=loss, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
+                    target_mode=target_mode, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
                     epochs=epochs, l2_reg=l2_reg)
         
     elif task_type == "test":
-        model.load_state_dict(torch.load(os.path.join(save_path, "model_20250429_003616.pth"), weights_only=True))
+        model.load_state_dict(torch.load(os.path.join(save_path, model_name), weights_only=True))
         print(f"Loaded model:\n", model)
-        evaluate_model(model, num_classes=output_dim, loss_name=loss, test_loader=test_loader)
+        evaluate_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
     else:
         raise ValueError(f"Unknown task type: {task_type}")

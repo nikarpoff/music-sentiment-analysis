@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+import torch
 import numpy as np
 import pandas as pd
 
@@ -19,11 +21,6 @@ from random import randint
 from ast import literal_eval
 from os import path as os_path
 
-from torch import stack
-from torch import from_numpy
-from torch import float as torch_float
-from torch import tensor as torch_tensor
-from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
 
@@ -59,7 +56,7 @@ def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode
     :param dataset_path: Path to the dataset directory.
     :param dataset_name: Name of the dataset file (depends on moods mode).
     :param device: Device to load the data on ('cuda' or 'cpu').
-    :param target_mode: Target mode for the labels ('multi_label' or 'one_hot'). Multi-label is used for all-moods dataset.
+    :param target_mode: Target mode for the labels ('multilabel' or 'onehot'). Multi-label is used for all-moods dataset.
     :param seq_len: Constant sequence length. Spectrograms with another length will be formated to this length.
     :param pad_value: Pad value for cases where padding of spectrogram required.
     :param transform_specs: sklearn transformer for preprocessing spectrograms. Optional.
@@ -109,12 +106,12 @@ def _load_dataset(dataset_path: str, dataset_name: str, target_mode: str, val_si
     df = pd.read_csv(os_path.join(dataset_path, dataset_name), sep='\t')
 
     # Select the target transformation based on the target mode.
-    if target_mode == "multi_label":
+    if target_mode == "multilabel":
         y = pd.DataFrame(multi_label_binarize(df['tags'].apply(literal_eval)))  # process the labels, apply literal_eval to convert strings to lists
-    elif target_mode == "one_hot":
+    elif target_mode == "onehot":
         y = pd.DataFrame(one_hot_encode_labels(df['tags'].to_frame()))  # process the labels to one-hot vectors
     else:
-        raise ValueError("Invalid target mode. Choose 'multi_label' or 'one_hot'.")
+        raise ValueError("Invalid target mode. Choose 'multilabel' or 'onehot'.")
     
     df.drop(columns=['tags'])  # remove the labels from the features
 
@@ -136,7 +133,7 @@ def melspecs_collate_fn(batch):
     # Return initial dimensions order (batch, channel, time)
     xs_padded = xs_padded.permute(0, 2, 1)
     
-    ys = stack(ys)
+    ys = torch.stack(ys)
 
     return xs_padded, ys
 
@@ -167,8 +164,8 @@ class MelspecsDataset(Dataset):
         if self.transform_specs:
             spec = self.transform_specs.transform(spec)
 
-        spec = from_numpy(spec).float()  # size (num_mels, num_frames<=seq_len>)
-        label = torch_tensor(self.y.iloc[idx], dtype=torch_float)  # size (num_classes,)
+        spec = torch.from_numpy(spec).float()  # size (num_mels, num_frames<=seq_len>)
+        label = torch.tensor(self.y.iloc[idx], dtype=torch.float)  # size (num_classes,)
         return spec, label
 
     def formate_spec(self, spec: np.ndarray) -> np.ndarray:

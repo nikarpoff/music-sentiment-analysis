@@ -13,11 +13,31 @@
 # limitations under the License.
 
 
+import torch
 from torch import nn
+import math
 
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 5000):
+        super().__init__()
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.pe[:x.size(1), :].unsqueeze(0)
+        return x
+    
 
 class SpectrogramPureTransformer(nn.Module):
-    def __init__(self, d_model: int, output_dim: int, nhead: int, num_layers: int, seq_len: int, output_activation: str = "sigmoid", device='cuda'):
+    def __init__(self, d_model: int, output_dim: int, nhead: int, num_layers: int, seq_len: int, device='cuda'):
         super().__init__()
         self.d_model = d_model
         self.output_dim = output_dim
@@ -25,13 +45,6 @@ class SpectrogramPureTransformer(nn.Module):
         self.num_layers = num_layers
         self.device = device
         self.seq_len = seq_len
-
-        if output_activation == "sigmoid":
-            self.output_activation = nn.Sigmoid()
-        elif output_activation == "softmax":
-            self.output_activation = nn.Softmax(dim=1)
-        else:
-            raise ValueError(f"Unknown output activation: {output_activation}")
 
         encoder_layer = nn.TransformerEncoderLayer(d_model=self.d_model, nhead=self.nhead, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.num_layers)
@@ -43,21 +56,19 @@ class SpectrogramPureTransformer(nn.Module):
         x = x.permute(0, 2, 1)                 # shape (batch, seq_len, mel_features)
 
         x = self.transformer_encoder(x)
-        x = self.linear(x[:, -1, :])
-        y = self.output_activation(x)
+        logits = self.linear(x[:, -1, :])
 
-        return y
+        return logits
 
     def __str__(self):
         model_describe = ""
         model_describe += str(self.transformer_encoder) + "\n"
         model_describe += str(self.linear) + "\n"
-        model_describe += str(self.output_activation) + "\n"
         return model_describe
 
 class SpectrogramTransformer(nn.Module):
     def __init__(self, cnn_units: int, rnn_units: int, d_model: int, output_dim: int, nhead: int, num_layers: int,
-                 seq_len: int, output_activation: str = "sigmoid", dropout=0.2, device='cuda'):
+                 seq_len: int, dropout=0.2, device='cuda'):
         super().__init__()
         self.d_model = d_model
         self.output_dim = output_dim
@@ -69,51 +80,79 @@ class SpectrogramTransformer(nn.Module):
         self.rnn_units = rnn_units
         self.dropout = dropout
 
-        if output_activation == "sigmoid":
-            self.output_activation = nn.Sigmoid()
-        elif output_activation == "softmax":
-            self.output_activation = nn.Softmax(dim=1)
-        else:
-            raise ValueError(f"Unknown output activation: {output_activation}")
-
         # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
         self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels=96, out_channels=128, kernel_size=3, stride=2, padding=3),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Conv1d(in_channels=128, out_channels=self.cnn_units, kernel_size=5, stride=2, padding=3),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2)
+            nn.Conv1d(in_channels=96, out_channels=128, kernel_size=3, padding=2),
+            nn.BatchNorm1d(128),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=2),
+
+            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=2),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=2),
+
+            nn.Conv1d(in_channels=256, out_channels=cnn_units, kernel_size=3, padding=2),
+            nn.BatchNorm1d(cnn_units),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=2)
         )
         # Output of CNN is (batch, d_model, new_sequence_length)
 
-        self.rnn = nn.GRU(self.cnn_units, rnn_units, num_layers=2, batch_first=True, dropout=self.dropout)
+        self.rnn = nn.GRU(cnn_units, rnn_units, num_layers=2, batch_first=True,
+                          dropout=dropout, bidirectional=True)
 
         self.d_model_proj = nn.Sequential(
-            nn.Linear(rnn_units, d_model),
+            nn.Linear(rnn_units * 2, d_model),
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout),
             nn.ReLU()
         )
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
+        self.pos_encoder = PositionalEncoding(d_model)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True
+        )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        self.output_proj = nn.Sequential(
-            nn.Linear(self.d_model, self.output_dim)
+        self.attention_pool = nn.Sequential(
+            nn.Linear(d_model, d_model//2),
+            nn.Tanh(),
+            nn.Linear(d_model//2, 1),
+            nn.Softmax(dim=1)
         )
 
+        self.output_proj = nn.Linear(self.d_model, self.output_dim)
+
     def forward(self, x):
-        x = self.cnn(x)  # cnn features - (batch, cnn_units, cnn_sequence_length)
-
-        x = x.permute(0, 2, 1)
-        x, _ = self.rnn(x)  # (batch, rnn_sequence_length, gru_units)
-
-        x = self.d_model_proj(x)  # (batch, rnn_sequence_length, d_model)
-
-        x = self.transformer_encoder(x)     # get transformer features
-        x = self.output_proj(x[:, -1, :])   # get linear projection of last transformer layer
-        y = self.output_activation(x)       # get result
-
-        return y
+        # CNN Feature extraction
+        x = self.cnn(x)  # (batch, cnn_units, seq)
+        x = x.permute(0, 2, 1)  # (batch, seq, cnn_units)
+        
+        # RNN processing
+        x, _ = self.rnn(x)  # (batch, seq, rnn_units*2)
+        
+        # Project to transformer dimensions
+        x = self.d_model_proj(x)  # (batch, seq, d_model)
+        
+        # Add positional encoding
+        x = self.pos_encoder(x)
+        
+        # Transformer processing
+        x = self.transformer_encoder(x)  # (batch, seq, d_model)
+        
+        # Attention pooling
+        attn_weights = self.attention_pool(x)  # (batch, seq, 1)
+        x = torch.sum(x * attn_weights, dim=1)  # (batch, d_model)
+        
+        # Final projection
+        logits = self.output_proj(x)
+        return logits
 
     def __str__(self):
         model_describe = ""
@@ -122,5 +161,4 @@ class SpectrogramTransformer(nn.Module):
         model_describe += str(self.d_model_proj) + "\n" * 2
         model_describe += str(self.transformer_encoder) + "\n"
         model_describe += str(self.output_proj) + "\n" * 2
-        model_describe += str(self.output_activation) + "\n"
         return model_describe

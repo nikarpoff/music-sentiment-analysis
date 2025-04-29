@@ -24,7 +24,7 @@ from torchmetrics.classification import (
 )
 
 
-def train_one_epoch(model, loss_function, metric_objs, is_multi_label, loader, total_batches, epoch, tb_writer, optimizer):
+def train_one_epoch(model, scaler, loss_function, metric_objs, is_multi_label, loader, total_batches, epoch, tb_writer, optimizer):
     running_loss = 0.
     avg_loss = 0.
     report_interval = max(1, total_batches // 10)
@@ -41,13 +41,18 @@ def train_one_epoch(model, loss_function, metric_objs, is_multi_label, loader, t
 
         optimizer.zero_grad()
 
-        outputs = model(inputs)
+        with torch.cuda.amp.autocast():
+            outputs = model(inputs)
+            loss = loss_function(outputs, labels)
+        
+        # Scaled Backward Pass and gradient Clipping
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-        loss = loss_function(outputs, labels)
+        scaler.step(optimizer)
+        scaler.update()
 
-        loss.backward()
-
-        optimizer.step()
         running_loss += loss.item()
 
         if is_multi_label:
@@ -55,6 +60,7 @@ def train_one_epoch(model, loss_function, metric_objs, is_multi_label, loader, t
             labels_pred = (outputs > 0.5).int()
         else:
             labels_true = torch.argmax(labels, dim=1)
+            labels_pred = torch.nn.Softmax(dim=1)(outputs)
             labels_pred = torch.argmax(outputs, dim=1)
 
         precision_metric.update(labels_pred, labels_true)
@@ -87,8 +93,10 @@ def validate_one_epoch(model, loss_function, metric_objs, is_multi_label, loader
             inputs = inputs.to(model.device, non_blocking=True)
             labels = labels.to(model.device, non_blocking=True)
 
-            outputs = model(inputs)
-            loss = loss_function(outputs, labels)
+            with torch.cuda.amp.autocast():
+                outputs = model(inputs)
+                loss = loss_function(outputs, labels)
+
             running_loss += loss
 
             if is_multi_label:
@@ -96,6 +104,7 @@ def validate_one_epoch(model, loss_function, metric_objs, is_multi_label, loader
                 labels_pred = (outputs > 0.5).int()
             else:
                 labels_true = torch.argmax(labels, dim=1)
+                labels_pred = torch.nn.Softmax(dim=1)(outputs)
                 labels_pred = torch.argmax(outputs, dim=1)
             
             precision_metric.update(labels_pred, labels_true)
@@ -105,42 +114,64 @@ def validate_one_epoch(model, loss_function, metric_objs, is_multi_label, loader
     val_avg_loss = running_loss / val_len
     return val_avg_loss, (precision_metric, recall_metric, f1_metric)
 
-def train_model(model, model_name, num_classes, save_path, loss_name, train_loader, val_loader, lr, epochs, l2_reg):
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=l2_reg)
+def train_model(model, model_name, num_classes, save_path, target_mode, train_loader, val_loader, lr, epochs, l2_reg):
+    """
+    Train model. Save checkpoints and trained model to save_path.
+    Correctly works with two losses and tasks types: multilabel classification and single-label classification.
 
-    if loss_name == "cross_entropy":
+    :param model: Model to train.
+    :param model_name: Name of the model (specstr, pure_specstr and e.t.c.).
+    :param num_classes: Number of moods to classify.
+    :param save_path: Path to save checkpoints and trained model.
+    :param task_type: Type of the task: multilabel classification or single-label classification.
+    :param train_loader: Loader of train data.
+    :param val_loader: Loader of validation data.
+    :param lr: learning rate.
+    :param epochs: Number of train epochs.
+    :param l2_reg: Regularization for optimizer.
+    """
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=l2_reg)
+    scaler = torch.cuda.amp.GradScaler()
+
+    if target_mode == "onehot":
         precision_metric = MulticlassPrecision(num_classes=num_classes, average='macro').to(model.device)
         recall_metric = MulticlassRecall(num_classes=num_classes, average='macro').to(model.device)
         f1_metric = MulticlassF1Score(num_classes=num_classes, average='macro').to(model.device)
         
         loss_function = torch.nn.CrossEntropyLoss()
         is_multilabel = False
-    elif loss_name == "binary_cross_entropy":
+    elif target_mode == "multilabel":
         precision_metric = MultilabelPrecision(num_labels=num_classes, average='micro').to(model.device)
         recall_metric = MultilabelRecall(num_labels=num_classes, average='micro').to(model.device)
         f1_metric = MultilabelF1Score(num_labels=num_classes, average='micro').to(model.device)
         
-        loss_function = torch.nn.BCELoss()
+        loss_function = torch.nn.BCEWithLogitsLoss()
         is_multilabel = True
+    else:
+        raise ValueError(f"Unknown target mode provided: {target_mode}")
 
+    # Collect metrics.
     metrics = (precision_metric, recall_metric, f1_metric)
 
+    # Initialize writers, vloss, timestamps.
     start_timestamp = datetime.now()
-    timestamp = start_timestamp.strftime('%Y%m%d_%H%M%S')
+    timestamp = start_timestamp.strftime('%d%m%y_%H%M%S')
     writer = SummaryWriter(f'runs/fashion_trainer_{timestamp}')
 
     best_vloss = float('inf')
     total_batches = len(train_loader)
 
+    # Train cycle.
     for epoch in range(epochs):
         print(f"\n Epoch {epoch + 1}/{epochs}")
 
         # Train the model for one epoch.
         model.train(True)
         start_time = time()
-        train_avg_loss, metrics = train_one_epoch(model, loss_function, metrics, is_multilabel, train_loader, total_batches, epoch, writer, optimizer)
+        train_avg_loss, metrics = train_one_epoch(model, scaler, loss_function, metrics, is_multilabel, train_loader, total_batches, epoch, writer, optimizer)
         train_time = time() - start_time
 
+        # Compute and write remembered train metrics.
         precision_metric, recall_metric, f1_metric = metrics
         train_precision = precision_metric.compute().item()
         train_recall = recall_metric.compute().item()
@@ -154,10 +185,12 @@ def train_model(model, model_name, num_classes, save_path, loss_name, train_load
         recall_metric.reset()
         f1_metric.reset()
 
+        # Validate model.
         start_time = time()
         val_avg_loss, metrics = validate_one_epoch(model, loss_function, metrics, is_multilabel, val_loader)
         val_time = time() - start_time
-        
+
+        # Compute and write remembered validation metrics.
         precision_metric, recall_metric, f1_metric = metrics
         val_precision = precision_metric.compute().item()
         val_recall = recall_metric.compute().item()
@@ -172,6 +205,7 @@ def train_model(model, model_name, num_classes, save_path, loss_name, train_load
         recall_metric.reset()
         f1_metric.reset()
 
+        # Remember best validation loss.
         if val_avg_loss < best_vloss:
             best_vloss = val_avg_loss
         
@@ -182,50 +216,63 @@ def train_model(model, model_name, num_classes, save_path, loss_name, train_load
             'optimizer_state_dict': optimizer.state_dict()
         }, os.path.join(save_path, f"{model_name}_checkpoint_{timestamp}_epoch_{epoch + 1}.pth"))
 
-        # Log loss.
+        # Log loss and metrics.
         print(f"\n Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss:.3f}; Validation loss: {val_avg_loss:.3f}")
         print(f"\t Training: precision: {train_precision:.3f}\t recall: {train_recall:.3f}\t F1: {train_f1:.3f}")
         print(f"\t Validation: precision: {val_precision:.3f}\t recall: {val_recall:.3f}\t F1: {val_f1:.3f}")
         print(f"Train time: {train_time:.3f}; validation time: {val_time:.3f}, total epoch time: {(train_time + val_time):.3f}\n")
+        
         torch.cuda.empty_cache()
 
-    writer.close()
-    model_save_path = os.path.join(save_path, f"{model_name}_{timestamp}.pth")
-    torch.save(model.state_dict(), model_save_path)
-
-    total_learning_time = (datetime.now() - start_timestamp)
+    # Get total train time and formate it.
+    end_timestamp = datetime.now()
+    total_learning_time = (end_timestamp - start_timestamp)
     days = total_learning_time.days
     hours, remainder = divmod(total_learning_time.seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     formated_learning_time = f"{days:02d} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
 
+    # Close writer and save trained model. Saved model naming is model_name + moods number + timestamp. Save only weigths.
+    writer.close()
+    model_save_path = os.path.join(save_path, f"{model_name}_{num_classes}_{end_timestamp.strftime('%d_%m_%Y')}.pth")
+    torch.save(model.state_dict(), model_save_path)
+
     print(f"Model saved to {model_save_path}\n\t best validation loss: {best_vloss:.3f}; total learning time: {formated_learning_time}")
 
-def evaluate_model(model, num_classes, loss_name, test_loader):
-    if loss_name == "cross_entropy":
+def evaluate_model(model, num_classes, target_mode, test_loader):
+    if target_mode == "onehot":
+        precision_metric = MulticlassPrecision(num_classes=num_classes, average='macro').to(model.device)
+        recall_metric = MulticlassRecall(num_classes=num_classes, average='macro').to(model.device)
+        f1_metric = MulticlassF1Score(num_classes=num_classes, average='macro').to(model.device)
+
         loss_function = torch.nn.CrossEntropyLoss()
-    elif loss_name == "binary_cross_entropy":
-        loss_function = torch.nn.BCELoss()
+        is_multilabel = False
+    elif target_mode == "multilabel":
+        precision_metric = MultilabelPrecision(num_labels=num_classes, average='micro').to(model.device)
+        recall_metric = MultilabelRecall(num_labels=num_classes, average='micro').to(model.device)
+        f1_metric = MultilabelF1Score(num_labels=num_classes, average='micro').to(model.device)
+
+        loss_function = torch.nn.BCEWithLogitsLoss()
+        is_multilabel = True
+    else:
+        raise ValueError(f"Unknown target mode provided: {target_mode}")
+    
+    # Collect metrics.
+    metrics = (precision_metric, recall_metric, f1_metric)
 
     print("Evaluating model...")
     model.eval()  # Set the model to evaluation mode
 
-    running_loss = 0.
-    test_len = len(test_loader)
-    time_start = time()
+    start_time = time()
+    test_avg_loss, metrics = validate_one_epoch(model, loss_function, metrics, is_multilabel, test_loader)
+    test_time = time() - start_time
 
-    with torch.no_grad():
-        for i, data in enumerate(test_loader):
-            inputs, labels = data
-            inputs = inputs.to(model.device, non_blocking=True)
-            labels = labels.to(model.device, non_blocking=True)
-
-            outputs = model(inputs)
-            loss = loss_function(outputs, labels)
-            running_loss += loss
+    # Compute and write remembered validation metrics.
+    precision_metric, recall_metric, f1_metric = metrics
+    precision = precision_metric.compute().item()
+    recall = recall_metric.compute().item()
+    f1 = f1_metric.compute().item()
     
-    total_time = time() - time_start
-    test_avg_loss = running_loss / test_len
-
-    # Log loss.
-    print(f"Test loss: {test_avg_loss:.3f}; Required time: {total_time:.3f}s")
+    # Log loss and metrics.
+    print(f"Test loss {test_avg_loss:.3f}\t precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}")
+    print(f"Test time: {test_time:.3f}")
