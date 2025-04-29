@@ -17,9 +17,8 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
 
 import json
+import torch
 import numpy as np
-from torch import device as torch_device
-from torch.cuda import is_available as is_cuda_available
 from dotenv import load_dotenv
 
 from argparse import ArgumentParser
@@ -122,7 +121,7 @@ if __name__ == "__main__":
     # Set the dataset name based on the moods number.
     dataset_name = "dataset_all_moods.tsv" if moods_number == 0 else f"dataset_{moods_number}_moods.tsv"
     output_dim = total_moods if moods_number == 0 else moods_number
-    device = torch_device("cuda" if is_cuda_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Select the target transformation based on the target mode.
     if moods_number == 0:
@@ -170,8 +169,11 @@ if __name__ == "__main__":
         raise ValueError(f"Unknown model type: {model_type}")
 
     if task_type == "train":
-        train_model(model, save_path, loss, train_loader, val_loader, lr=learning_rate, epochs=epochs, l2_reg=l2_reg)
+        print(f"Built model:\n", model)
+        train_model(model, model_type, save_path, loss, test_loader, val_loader, lr=learning_rate, epochs=epochs, l2_reg=l2_reg)
     elif task_type == "test":
-        pass
+        model.load_state_dict(torch.load(os.path.join(save_path, "model_20250429_003616.pth"), weights_only=True))
+        print(f"Loaded model:\n", model)
+        evaluate_model(model, loss_name=loss, test_loader=test_loader)
     else:
         raise ValueError(f"Unknown task type: {task_type}")

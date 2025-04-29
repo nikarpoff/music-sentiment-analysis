@@ -33,17 +33,10 @@ class SpectrogramPureTransformer(nn.Module):
         else:
             raise ValueError(f"Unknown output activation: {output_activation}")
 
-        print("Building model...")
-
         encoder_layer = nn.TransformerEncoderLayer(d_model=self.d_model, nhead=self.nhead, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.num_layers)
 
         self.linear = nn.Linear(self.d_model, self.output_dim)
-
-        print(self.transformer_encoder, "\n")
-        print(self.linear, "\n")
-        print(self.output_activation, "\n")
-        print("Model built.\n")
 
     def forward(self, x):
         # x = truncate_spec(x, self.seq_len)  # shape (batch, mel_features, seq_len)
@@ -55,6 +48,12 @@ class SpectrogramPureTransformer(nn.Module):
 
         return y
 
+    def __str__(self):
+        model_describe = ""
+        model_describe += str(self.transformer_encoder) + "\n"
+        model_describe += str(self.linear) + "\n"
+        model_describe += str(self.output_activation) + "\n"
+        return model_describe
 
 class SpectrogramTransformer(nn.Module):
     def __init__(self, cnn_units: int, rnn_units: int, d_model: int, output_dim: int, nhead: int, num_layers: int,
@@ -76,8 +75,6 @@ class SpectrogramTransformer(nn.Module):
             self.output_activation = nn.Softmax(dim=1)
         else:
             raise ValueError(f"Unknown output activation: {output_activation}")
-
-        print("Building model...")
 
         # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
         self.cnn = nn.Sequential(
@@ -104,14 +101,6 @@ class SpectrogramTransformer(nn.Module):
             nn.Linear(self.d_model, self.output_dim)
         )
 
-        print(self.cnn, "\n")
-        print(self.rnn, "\n")
-        print(self.d_model_proj, "\n")
-        print(self.transformer_encoder, "\n")
-        print(self.output_proj, "\n")
-        print(self.output_activation, "\n")
-        print("Model built.\n")
-
     def forward(self, x):
         x = self.cnn(x)  # cnn features - (batch, cnn_units, cnn_sequence_length)
 
@@ -125,3 +114,13 @@ class SpectrogramTransformer(nn.Module):
         y = self.output_activation(x)       # get result
 
         return y
+
+    def __str__(self):
+        model_describe = ""
+        model_describe += str(self.cnn) + "\n" * 2
+        model_describe += str(self.rnn) + "\n" * 2
+        model_describe += str(self.d_model_proj) + "\n" * 2
+        model_describe += str(self.transformer_encoder) + "\n"
+        model_describe += str(self.output_proj) + "\n" * 2
+        model_describe += str(self.output_activation) + "\n"
+        return model_describe
