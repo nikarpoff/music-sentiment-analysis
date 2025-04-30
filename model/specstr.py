@@ -35,21 +35,21 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(1), :].unsqueeze(0)
         return x
     
+    def __str__(self):
+        return "Positional sinusoidal encoding"
 
 class SpectrogramPureTransformer(nn.Module):
-    def __init__(self, d_model: int, output_dim: int, nhead: int, num_layers: int, seq_len: int, device='cuda'):
+    def __init__(self, output_dim: int, device='cuda'):
         super().__init__()
-        self.d_model = d_model
-        self.output_dim = output_dim
-        self.nhead = nhead
-        self.num_layers = num_layers
         self.device = device
-        self.seq_len = seq_len
+        d_model = 512
+        nhead = 32
+        num_layers = 6
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model=self.d_model, nhead=self.nhead, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.num_layers)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        self.linear = nn.Linear(self.d_model, self.output_dim)
+        self.linear = nn.Linear(d_model, output_dim)
 
     def forward(self, x):
         # x = truncate_spec(x, self.seq_len)  # shape (batch, mel_features, seq_len)
@@ -67,8 +67,9 @@ class SpectrogramPureTransformer(nn.Module):
         return model_describe
 
 class SpectrogramTransformer(nn.Module):
-    def __init__(self, output_dim: int, dropout=0.2):
+    def __init__(self, output_dim: int, dropout=0.2, device='cuda'):
         super().__init__()
+        self.device = device
 
         # Model params
         CNN_OUT_CHANNELS = 256
@@ -158,6 +159,8 @@ class SpectrogramTransformer(nn.Module):
         model_describe += str(self.cnn) + "\n" * 2
         model_describe += str(self.rnn) + "\n" * 2
         model_describe += str(self.d_model_proj) + "\n" * 2
+        model_describe += str(self.pos_encoder) + "\n" * 2
         model_describe += str(self.transformer_encoder) + "\n"
+        model_describe += str(self.attention_pool) + "\n" * 2
         model_describe += str(self.output_proj) + "\n" * 2
         return model_describe

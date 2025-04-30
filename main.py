@@ -152,11 +152,9 @@ if __name__ == "__main__":
     if model_type == "specstr":
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
 
-        model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout,
-                                       seq_len=seq_len, device=device).to(device)
+        model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
     elif model_type == "pure_specstr":
-        model = SpectrogramPureTransformer(output_dim=output_dim, seq_len=seq_len,
-                                           device=device).to(device)
+        model = SpectrogramPureTransformer(output_dim=output_dim, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
