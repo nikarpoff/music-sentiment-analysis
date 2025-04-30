@@ -18,6 +18,7 @@ from time import time
 from datetime import datetime
 import torch.optim as optim
 from torch.utils.tensorboard.writer import SummaryWriter
+from torch.optim.lr_scheduler import CosineAnnealingLR, SequentialLR, LinearLR
 from torchmetrics.classification import (
     MulticlassPrecision, MulticlassRecall, MulticlassF1Score,
     MultilabelPrecision, MultilabelRecall, MultilabelF1Score
@@ -27,7 +28,7 @@ from torchmetrics.classification import (
 def train_one_epoch(model, scaler, loss_function, metric_objs, is_multi_label, loader, total_batches, epoch, tb_writer, optimizer):
     running_loss = 0.
     avg_loss = 0.
-    report_interval = max(1, total_batches // 10)
+    report_interval = max(1, total_batches // 20)
     
     # Load metrics
     precision_metric, recall_metric, f1_metric = metric_objs
@@ -67,7 +68,7 @@ def train_one_epoch(model, scaler, loss_function, metric_objs, is_multi_label, l
         recall_metric.update(labels_pred, labels_true)
         f1_metric.update(labels_pred, labels_true)
 
-        # Report 10 times per epoch
+        # Report 20 times per epoch
         if i % report_interval == report_interval - 1:
             time_per_batch = (time() - start_time) / report_interval
             avg_loss = running_loss / report_interval
@@ -131,6 +132,11 @@ def train_model(model, model_name, num_classes, save_path, target_mode, train_lo
     :param l2_reg: Regularization for optimizer.
     """
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=l2_reg)
+
+    # warmup_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=500)
+    # cosine_scheduler = CosineAnnealingLR(optimizer, T_max=1000)
+    # scheduler = SequentialLR(optimizer, [warmup_scheduler, cosine_scheduler], milestones=[500])
+
     scaler = torch.cuda.amp.GradScaler()
 
     if target_mode == "onehot":
@@ -209,6 +215,9 @@ def train_model(model, model_name, num_classes, save_path, target_mode, train_lo
         if val_avg_loss < best_vloss:
             best_vloss = val_avg_loss
         
+        # current_lr = optimizer.param_groups[0]['lr']
+        # writer.add_scalar('Learning rate', current_lr, epoch)
+
         # Save checkpoint.
         torch.save({
             'epoch': epoch,
@@ -217,7 +226,7 @@ def train_model(model, model_name, num_classes, save_path, target_mode, train_lo
         }, os.path.join(save_path, f"{model_name}_checkpoint_{timestamp}_epoch_{epoch + 1}.pth"))
 
         # Log loss and metrics.
-        print(f"\n Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss:.3f}; Validation loss: {val_avg_loss:.3f}")
+        print(f"\n Epoch {epoch + 1}/{epochs} - Training loss: {train_avg_loss:.3f}; Validation loss: {val_avg_loss:.3f}; lr: {current_lr:.7f}")
         print(f"\t Training: precision: {train_precision:.3f}\t recall: {train_recall:.3f}\t F1: {train_f1:.3f}")
         print(f"\t Validation: precision: {val_precision:.3f}\t recall: {val_recall:.3f}\t F1: {val_f1:.3f}")
         print(f"Train time: {train_time:.3f}; validation time: {val_time:.3f}, total epoch time: {(train_time + val_time):.3f}\n")

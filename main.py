@@ -46,10 +46,10 @@ def cli_arguments_preprocess() -> str:
                         help="Type of machine learning model to be used")
     
     parser.add_argument("--task", required=True,
-                        choices=["train", "test"],
+                        choices=["train", "ctrain", "test"],
                         help="Type of task to be performed")
     
-    parser.add_argument("mname", nargs="?", help="Model name for load and test (Required for task == test)")
+    parser.add_argument("mname", nargs="?", help="Model name for load and test/continue train (Required for task == test or ctrain)")
     
     parser.add_argument("--moods", required=False,
                       choices=["2", "4", "8", "all"],
@@ -63,12 +63,12 @@ def cli_arguments_preprocess() -> str:
     if not args.moods or args.moods == "all":
         args.moods = 0
 
-    if args.task == "test" and args.mname is None:
-        parser.error("For test model you must provide the name of saved model")
+    if args.mname is None and (args.task == "test" or args.task == "ctrain"):
+        parser.error("For load model you must provide the name of saved model (with file extention)")
 
     return os.path.abspath(args.path), args.model, args.mname, args.task, int(args.moods)
 
-def get_specs_scaler(melspecs_stats_path, seq_len) -> MinMaxScaler:
+def get_specs_scaler(melspecs_stats_path) -> MinMaxScaler:
     """
     Loads MinMaxScaler for mel-spectrograms transform
     """
@@ -93,7 +93,6 @@ def get_specs_scaler(melspecs_stats_path, seq_len) -> MinMaxScaler:
     scaler.data_min_ = np.array([min_amplitude])
     scaler.data_max_ = np.array([max_amplitude])
     scaler.data_range_ = np.array([max_amplitude - min_amplitude])
-    scaler.n_features_in_ = seq_len
 
     return scaler, min_amplitude, max_amplitude
 
@@ -136,14 +135,15 @@ if __name__ == "__main__":
 
     # Load required dataset.
     if model_type == "pure_specstr" or model_type == "prelearned_specstr" or model_type == "specstr":
-        seq_len = int(os.getenv(f"{model_type.upper()}_SEQ_LEN", 1024))
+        max_seq_len = int(os.getenv(f"{model_type.upper()}_MAX_SEQ_LEN", 25000))
+        min_seq_len = int(os.getenv(f"{model_type.upper()}_MIN_SEQ_LEN", 1000))
 
         # For MinMaxScaler max/min amplitudes required.
-        transform_specs, min_amp, _ = get_specs_scaler(os.path.join(outputs_path, "melspecs_stats.json"), seq_len)
+        transform_specs, min_amp, _ = get_specs_scaler(os.path.join(outputs_path, "melspecs_stats.json"))
 
         # Load the dataset.
-        train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, device, target_mode,
-                                                                   pad_value=min_amp, batch_size=batch_size, seq_len=seq_len,
+        train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, device, target_mode, pad_value=min_amp,
+                                                                   batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len,
                                                                    num_workers=4, val_size=0.2, test_size=0.2,
                                                                    transform_specs=transform_specs, random_state=7)
     else:
@@ -159,14 +159,21 @@ if __name__ == "__main__":
         raise ValueError(f"Unknown model type: {model_type}")
 
     if task_type == "train":
+        # In train we starts with new model.
         print(f"Built model:\n", model)
         train_model(model, model_name=model_type, num_classes=output_dim, save_path=save_path,
                     target_mode=target_mode, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
                     epochs=epochs, l2_reg=l2_reg)
-        
-    elif task_type == "test":
+    else:
+        # In other tasks we use trained model.
         model.load_state_dict(torch.load(os.path.join(save_path, model_name), weights_only=True))
         print(f"Loaded model:\n", model)
+
+    if task_type == "test":
         evaluate_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
+    elif task_type == "ctrain":
+        train_model(model, model_name=model_type, num_classes=output_dim, save_path=save_path,
+                    target_mode=target_mode, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
+                    epochs=epochs, l2_reg=l2_reg)
     else:
         raise ValueError(f"Unknown task type: {task_type}")

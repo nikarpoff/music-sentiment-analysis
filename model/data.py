@@ -49,15 +49,17 @@ def multi_label_binarize(labels: pd.Series) -> pd.Series:
     binarized_labels = encoder.fit_transform(labels)
     return binarized_labels
 
-def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode: str, seq_len: int, pad_value=-90., val_size=0.2, test_size=0.2, 
-                       batch_size=32, transform_specs: TransformerMixin = None, num_workers=8, random_state=None) -> tuple:
+def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode: str, min_seq_len: None, max_seq_len: None,
+                       pad_value=-90., val_size=0.2, test_size=0.2, batch_size=32, transform_specs: TransformerMixin = None,
+                       num_workers=8, random_state=None) -> tuple:
     """
     Load the dataset and create DataLoader objects for training, validation, and testing.
     :param dataset_path: Path to the dataset directory.
     :param dataset_name: Name of the dataset file (depends on moods mode).
     :param device: Device to load the data on ('cuda' or 'cpu').
     :param target_mode: Target mode for the labels ('multilabel' or 'onehot'). Multi-label is used for all-moods dataset.
-    :param seq_len: Constant sequence length. Spectrograms with another length will be formated to this length.
+    :param max_seq_len: Constant max sequence length. Spectrograms with another length will be truncated to this length. Optional
+    :param min_seq_len: Constant min sequence length. Spectrograms with another length will be padded to this length. Optional
     :param pad_value: Pad value for cases where padding of spectrogram required.
     :param transform_specs: sklearn transformer for preprocessing spectrograms. Optional.
     :param val_size: Proportion of the dataset to include in the validation split.
@@ -79,8 +81,8 @@ def load_specs_dataset(dataset_path: str, dataset_name: str, device, target_mode
         persistent_workers = True
 
     def _get_specs_loader(x, y, dataset_path):
-        dataset = MelspecsDataset(x, y, device=device, dataset_path=dataset_path,
-                                  transform_specs=transform_specs, seq_len=seq_len, pad_value=pad_value)
+        dataset = MelspecsDataset(x, y, device=device, dataset_path=dataset_path, transform_specs=transform_specs,
+                                  max_seq_len=max_seq_len, min_seq_len=min_seq_len, pad_value=pad_value)
 
         return DataLoader(
             dataset,
@@ -142,13 +144,14 @@ class MelspecsDataset(Dataset):
     """
     Loader of mel-spectrograms dataset.
     """
-    def __init__(self, x, y, device, dataset_path, seq_len, pad_value, transform_specs: TransformerMixin = None):
+    def __init__(self, x, y, device, dataset_path, min_seq_len, max_seq_len, pad_value, transform_specs: TransformerMixin = None):
         self.x = x
         self.y = y
         self.dataset_path = dataset_path
         self.transform_specs = transform_specs
         self.device = device
-        self.seq_len = seq_len
+        self.min_seq_len = min_seq_len
+        self.max_seq_len = max_seq_len
         self.pad_value = pad_value
 
     def __len__(self):
@@ -158,29 +161,32 @@ class MelspecsDataset(Dataset):
         row = self.x.iloc[idx]
 
         spec = np.load(os_path.join(self.dataset_path, row['melspecs_path']))
-        spec = self.formate_spec(spec)  # align spec
+
+        if self.min_seq_len is not None and spec.shape[1] < self.min_seq_len:
+            spec = self.pad_spec(spec)  # pad spec if required
+        elif self.max_seq_len is not None and spec.shape[1] > self.max_seq_len:
+            spec = self.truncate_spec(spec)  # truncate spec if required
 
         # Apply transformation to the mel spectrogram if specified
         if self.transform_specs:
             spec = self.transform_specs.transform(spec)
 
-        spec = torch.from_numpy(spec).float()  # size (num_mels, num_frames<=seq_len>)
+        spec = torch.from_numpy(spec).float()  # size (num_mels, num_frames)
         label = torch.tensor(self.y.iloc[idx], dtype=torch.float)  # size (num_classes,)
         return spec, label
 
-    def formate_spec(self, spec: np.ndarray) -> np.ndarray:
+    def pad_spec(self, spec: np.ndarray) -> np.ndarray:
         """
-        Truncates or pads spectrogramms to seq_len length. Length is second dimension.
-
-        In truncate case makes random correct choise of start point.
+        Pads spectrogramms to min_seq_len length. Length is second dimension.
         """
-        spec_len = spec.shape[1]
+        pad_width = ((0, 0), (0, self.min_seq_len - spec.shape[1]))
+        return np.pad(spec, pad_width=pad_width, mode='constant', constant_values=self.pad_value)
 
-        if spec_len >= self.seq_len:
-            start = randint(0, spec_len - self.seq_len)
-            spec = spec[:, start:start + self.seq_len]
-        else:
-            pad_width = ((0, 0), (0, self.seq_len - spec_len))
-            spec = np.pad(spec, pad_width=pad_width, mode='constant', constant_values=self.pad_value)
+    def truncate_spec(self, spec: np.ndarray) -> np.ndarray:
+        """
+        Truncates spectrogramms to max_seq_len length. Length is second dimension.
 
-        return spec
+        Makes random correct choise of start point.
+        """
+        start = randint(0, spec.shape[1] - self.max_seq_len)
+        return spec[:, start:start + self.max_seq_len]

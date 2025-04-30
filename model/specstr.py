@@ -22,12 +22,14 @@ class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
         super().__init__()
 
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)  # positional encoding
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)  # positions from 0 to max_len-1
 
-        pe[:, 0::2] = torch.sin(position * div_term)  # even code with sin
-        pe[:, 1::2] = torch.cos(position * div_term)  # odd code with cos
+        # sinusoidal absolute, wk = 1 / 1000 ^ (2k / d)
+        omega = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pe[:, 0::2] = torch.sin(position * omega)  # even code with sin
+        pe[:, 1::2] = torch.cos(position * omega)  # odd code with cos
 
         self.register_buffer('pe', pe)
 
@@ -38,33 +40,48 @@ class PositionalEncoding(nn.Module):
     def __str__(self):
         return "Positional sinusoidal encoding"
 
+
 class SpectrogramPureTransformer(nn.Module):
     def __init__(self, output_dim: int, device='cuda'):
         super().__init__()
         self.device = device
-        d_model = 512
-        nhead = 32
-        num_layers = 6
+        D_MODEL = 96
+        NHEAD = 16
+        NUM_LAYERS = 4
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=D_MODEL, nhead=NHEAD, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_LAYERS)
 
-        self.linear = nn.Linear(d_model, output_dim)
+        self.attention_pool = nn.Sequential(
+            nn.Linear(D_MODEL, D_MODEL//2),
+            nn.Tanh(),
+            nn.Linear(D_MODEL//2, 1),
+            nn.Softmax(dim=1)
+        )
+
+        self.output_proj = nn.Linear(D_MODEL, output_dim)
 
     def forward(self, x):
         # x = truncate_spec(x, self.seq_len)  # shape (batch, mel_features, seq_len)
         x = x.permute(0, 2, 1)                 # shape (batch, seq_len, mel_features)
 
         x = self.transformer_encoder(x)
-        logits = self.linear(x[:, -1, :])
 
+        # Attention pooling
+        attn_weights = self.attention_pool(x)  # (batch, seq, 1)
+        x = torch.sum(x * attn_weights, dim=1)  # (batch, d_model)
+
+        # Final projection
+        logits = self.output_proj(x)
         return logits
 
     def __str__(self):
         model_describe = ""
         model_describe += str(self.transformer_encoder) + "\n"
-        model_describe += str(self.linear) + "\n"
+        model_describe += str(self.attention_pool) + "\n"
+        model_describe += str(self.output_proj) + "\n"
         return model_describe
+
 
 class SpectrogramTransformer(nn.Module):
     def __init__(self, output_dim: int, dropout=0.2, device='cuda'):
@@ -116,7 +133,7 @@ class SpectrogramTransformer(nn.Module):
             dropout=dropout,
             activation='gelu',
             batch_first=True,
-            norm_first=True
+            norm_first=False
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_ENCODERS)
 
@@ -156,11 +173,11 @@ class SpectrogramTransformer(nn.Module):
 
     def __str__(self):
         model_describe = ""
-        model_describe += str(self.cnn) + "\n" * 2
-        model_describe += str(self.rnn) + "\n" * 2
-        model_describe += str(self.d_model_proj) + "\n" * 2
+        model_describe += "CNN: " + str(self.cnn) + "\n" * 2
+        model_describe += "RNN: " + str(self.rnn) + "\n" * 2
+        model_describe += "Projection to transformer depth" + str(self.d_model_proj) + "\n" * 2
         model_describe += str(self.pos_encoder) + "\n" * 2
-        model_describe += str(self.transformer_encoder) + "\n"
-        model_describe += str(self.attention_pool) + "\n" * 2
-        model_describe += str(self.output_proj) + "\n" * 2
+        model_describe += "Transformer Encoder: " + str(self.transformer_encoder) + "\n"
+        model_describe += "Attention pooling: " + str(self.attention_pool) + "\n" * 2
+        model_describe += "Output projection: " + str(self.output_proj) + "\n" * 2
         return model_describe
