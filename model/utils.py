@@ -156,7 +156,7 @@ def train_model(model, model_name, num_classes, save_path, target_mode, train_lo
     # Initialize writers, vloss, timestamps.
     start_timestamp = datetime.now()
     timestamp = start_timestamp.strftime('%d%m%y_%H%M%S')
-    writer = SummaryWriter(f'runs/fashion_trainer_{timestamp}')
+    writer = SummaryWriter(f'runs/train_{model_name}_{num_classes}_{timestamp}')
 
     best_vloss = float('inf')
     total_batches = len(train_loader)

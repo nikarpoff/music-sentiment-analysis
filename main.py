@@ -137,10 +137,6 @@ if __name__ == "__main__":
     # Load required dataset.
     if model_type == "pure_specstr" or model_type == "prelearned_specstr" or model_type == "specstr":
         seq_len = int(os.getenv(f"{model_type.upper()}_SEQ_LEN", 1024))
-        
-        d_model = int(os.getenv(f"{model_type.upper()}_D_MODEL", 512))
-        nhead = int(os.getenv(f"{model_type.upper()}_NHEAD", 32))
-        num_layers = int(os.getenv(f"{model_type.upper()}_NUM_LAYERS", 6))
 
         # For MinMaxScaler max/min amplitudes required.
         transform_specs, min_amp, _ = get_specs_scaler(os.path.join(outputs_path, "melspecs_stats.json"), seq_len)
@@ -155,15 +151,12 @@ if __name__ == "__main__":
 
     if model_type == "specstr":
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
-        cnn_units = int(os.getenv("SPECSTR_CNN_UNITS", 512))
-        rnn_units = int(os.getenv("SPECSTR_RNN_UNITS", 256))
 
-        model = SpectrogramTransformer(d_model=d_model, output_dim=output_dim, dropout=dropout,
-                                       cnn_units=cnn_units, rnn_units=rnn_units,
-                                       nhead=nhead, num_layers=num_layers, seq_len=seq_len, device=device).to(device)
+        model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout,
+                                       seq_len=seq_len, device=device).to(device)
     elif model_type == "pure_specstr":
-        model = SpectrogramPureTransformer(d_model=d_model, output_dim=output_dim, nhead=nhead, num_layers=num_layers,
-                                           seq_len=seq_len, device=device).to(device)
+        model = SpectrogramPureTransformer(output_dim=output_dim, seq_len=seq_len,
+                                           device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

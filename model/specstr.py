@@ -26,8 +26,8 @@ class PositionalEncoding(nn.Module):
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
 
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        pe[:, 0::2] = torch.sin(position * div_term)  # even code with sin
+        pe[:, 1::2] = torch.cos(position * div_term)  # odd code with cos
 
         self.register_buffer('pe', pe)
 
@@ -67,18 +67,15 @@ class SpectrogramPureTransformer(nn.Module):
         return model_describe
 
 class SpectrogramTransformer(nn.Module):
-    def __init__(self, cnn_units: int, rnn_units: int, d_model: int, output_dim: int, nhead: int, num_layers: int,
-                 seq_len: int, dropout=0.2, device='cuda'):
+    def __init__(self, output_dim: int, dropout=0.2):
         super().__init__()
-        self.d_model = d_model
-        self.output_dim = output_dim
-        self.nhead = nhead
-        self.num_layers = num_layers
-        self.seq_len = seq_len
-        self.device = device
-        self.cnn_units = cnn_units
-        self.rnn_units = rnn_units
-        self.dropout = dropout
+
+        # Model params
+        CNN_OUT_CHANNELS = 256
+        RNN_UNITS = 128
+        TRANSFORMER_DEPTH = 256
+        NHEAD = 16
+        NUM_ENCODERS = 6
 
         # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
         self.cnn = nn.Sequential(
@@ -92,42 +89,44 @@ class SpectrogramTransformer(nn.Module):
             nn.GELU(),
             nn.MaxPool1d(kernel_size=2),
 
-            nn.Conv1d(in_channels=256, out_channels=cnn_units, kernel_size=3, padding=2),
-            nn.BatchNorm1d(cnn_units),
+            nn.Conv1d(in_channels=256, out_channels=CNN_OUT_CHANNELS, kernel_size=3, padding=2),
+            nn.BatchNorm1d(CNN_OUT_CHANNELS),
             nn.GELU(),
             nn.MaxPool1d(kernel_size=2)
         )
         # Output of CNN is (batch, d_model, new_sequence_length)
 
-        self.rnn = nn.GRU(cnn_units, rnn_units, num_layers=2, batch_first=True,
+        self.rnn = nn.GRU(CNN_OUT_CHANNELS, RNN_UNITS, num_layers=2, batch_first=True,
                           dropout=dropout, bidirectional=True)
 
+        # Linear projection with layer normalization from RNN output to TRANSFORMER input
         self.d_model_proj = nn.Sequential(
-            nn.Linear(rnn_units * 2, d_model),
-            nn.LayerNorm(d_model),
+            nn.Linear(RNN_UNITS * 2, TRANSFORMER_DEPTH),
+            nn.LayerNorm(TRANSFORMER_DEPTH),
             nn.Dropout(dropout),
             nn.ReLU()
         )
 
-        self.pos_encoder = PositionalEncoding(d_model)
+        # Use sinusoidal positional encoding
+        self.pos_encoder = PositionalEncoding(TRANSFORMER_DEPTH)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
+            d_model=TRANSFORMER_DEPTH,
+            nhead=NHEAD,
             dropout=dropout,
             activation='gelu',
             batch_first=True,
             norm_first=True
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_ENCODERS)
 
         self.attention_pool = nn.Sequential(
-            nn.Linear(d_model, d_model//2),
+            nn.Linear(TRANSFORMER_DEPTH, TRANSFORMER_DEPTH//2),
             nn.Tanh(),
-            nn.Linear(d_model//2, 1),
+            nn.Linear(TRANSFORMER_DEPTH//2, 1),
             nn.Softmax(dim=1)
         )
 
-        self.output_proj = nn.Linear(self.d_model, self.output_dim)
+        self.output_proj = nn.Linear(TRANSFORMER_DEPTH, output_dim)
 
     def forward(self, x):
         # CNN Feature extraction
