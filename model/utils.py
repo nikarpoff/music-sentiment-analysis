@@ -18,6 +18,7 @@ import torch
 from time import time
 from datetime import datetime
 import torch.optim as optim
+from model.data import KFoldSpecsDataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torchmetrics.classification import (
     MulticlassPrecision, MulticlassRecall, MulticlassF1Score,
@@ -34,15 +35,14 @@ class ClassificationModelTrainer():
     Model trainer. Save checkpoints and trained model to save_path.
     Correctly works with two losses and tasks types: multilabel classification and single-label classification.
     """
-    def __init__(self, model, model_name, num_classes, save_path, target_mode, train_loader, val_loader, lr, epochs, l2_reg):
+    def __init__(self, model, model_name: str, num_classes: int, save_path: str, target_mode: str, kfold_loader: KFoldSpecsDataLoader, lr: float, epochs: int, l2_reg: float):
         """
         :param model: Model to train.
         :param model_name: Name of the model (specstr, pure_specstr and e.t.c.).
         :param num_classes: Number of moods to classify.
         :param save_path: Path to save checkpoints and trained model.
         :param task_type: Type of the task: multilabel classification or single-label classification.
-        :param train_loader: Loader of train data.
-        :param val_loader: Loader of validation data.
+        :param kfold_loader: Loader of train data. Iterable object with train/val loaders as elements.
         :param lr: learning rate.
         :param epochs: Number of train epochs.
         :param l2_reg: Regularization for optimizer.
@@ -51,21 +51,20 @@ class ClassificationModelTrainer():
         self.model_name = model_name
         self.num_classes = num_classes
         self.save_path = save_path
-        self.train_loader = train_loader
-        self.val_loader = val_loader
+        self.kfold_loader = kfold_loader
         self.epochs = epochs
 
+        self.fold = 0
         self.epoch = 0
         self.best_vloss = float('inf')
-        self.train_batches = len(train_loader)
-        self.val_batches = len(val_loader)
-        self.report_interval = max(1, self.train_batches // 20)
+        self.folds = len(kfold_loader)
+        self.report_times = 20
         
         # AdamW optimizer. Use weigth decay and adaptive learning rate.
         self.optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=l2_reg)
 
         # Sheduler 1: OneCycleLR (per batch)
-        total_steps = epochs * len(train_loader)
+        total_steps = epochs * self.folds * kfold_loader.get_train_len()
         self.sheduler_one_cycle = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=lr * 10,
@@ -125,11 +124,18 @@ class ClassificationModelTrainer():
         
         if "checkpoint" in saved_model_name:
             ckpt = torch.load(saved_model_path, map_location=self.model.device)
-            self.model.load_state_dict(ckpt['model_state_dict'])
-            self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-            self.sheduler_one_cycle.load_state_dict(ckpt['one_cycle_state_dict'])
-            self.sheduler_plateau.load_state_dict(ckpt['plateau_state_dict'])
-            self.epoch = ckpt['epoch']
+            self.model.load_state_dict(ckpt["model_state_dict"])
+            self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            self.sheduler_one_cycle.load_state_dict(ckpt["one_cycle_state_dict"])
+            self.sheduler_plateau.load_state_dict(ckpt["plateau_state_dict"])
+            self.epoch = ckpt["epoch"] + 1
+            self.fold = ckpt["fold"]
+
+            if self.epoch == self.epochs:
+                self.fold += 1
+                self.epoch = 0
+
+            self.kfold_loader.set_start(self.fold)  # start loading folds from checkpoint's fold
 
             match = re.search(r"checkpoint_(\d{6})_(\d{6})_epoch_(\d+)\.", saved_model_name)
 
@@ -137,7 +143,7 @@ class ClassificationModelTrainer():
                 date_str, time_str, _ = match.groups()
                 self.start_timestamp = datetime.strptime(f"{date_str}_{time_str}", TIMESTAMP_FORMAT)
             else:
-                print(f"Invalid checkpoint file name: expected '{self.model_name}_checkpoint_<{DATE_FORMAT}>_epoch_<number>', found: {saved_model_name}")
+                print(f"Invalid checkpoint file name: expected '{self.model_name}_checkpoint_<{TIMESTAMP_FORMAT}>_fold_<number>_epoch_<number>', found: {saved_model_name}")
                 self.start_timestamp = datetime.now()
         else:
             self.model.load_state_dict(torch.load(saved_model_path, weights_only=True))
@@ -153,56 +159,63 @@ class ClassificationModelTrainer():
             print("First, call init_new_train()/init_continue_train()!")
             return
 
-        while self.epoch < self.epochs:
-            print(f"Epoch {self.epoch + 1}/{self.epochs}")
+        # For every fold.
+        for train_loader, val_loader in self.kfold_loader:
+            # And for every epoch.
+            while self.epoch < self.epochs:
+                print(f"Fold {self.fold + 1}/{self.folds}; Epoch {self.epoch + 1}/{self.epochs}")
 
-            # Train for one epoch.
-            start_time = time()
-            train_avg_loss = self._train_one_epoch()
-            epoch_train_time = time() - start_time
-            
-            train_precision, train_recall, train_f1 = self._compute_and_reset_metrics()
-            
-            self.writer.add_scalar('Precision/train', train_precision, self.epoch + 1)
-            self.writer.add_scalar('Recall/train', train_recall, self.epoch + 1)
-            self.writer.add_scalar('F1/train', train_f1, self.epoch + 1)
+                # Train for one epoch.
+                start_time = time()
+                train_avg_loss = self._train_one_epoch(train_loader)
+                epoch_train_time = time() - start_time
 
-            # Validate model.
-            start_time = time()
-            val_avg_loss = self._validate_one_epoch()
-            epoch_val_time = time() - start_time
-            
-            val_precision, val_recall, val_f1 = self._compute_and_reset_metrics()
+                train_precision, train_recall, train_f1 = self._compute_and_reset_metrics()
 
-            self.writer.add_scalar('Loss/validation', val_avg_loss, self.epoch + 1)
-            self.writer.add_scalar('Precision/validation', val_precision, self.epoch + 1)
-            self.writer.add_scalar('Recall/validation', val_recall, self.epoch + 1)
-            self.writer.add_scalar('F1/validation', val_f1, self.epoch + 1)
+                self.writer.add_scalar('Precision/train', train_precision, self.epoch + 1)
+                self.writer.add_scalar('Recall/train', train_recall, self.epoch + 1)
+                self.writer.add_scalar('F1/train', train_f1, self.epoch + 1)
 
-            # Remember best validation loss.
-            if val_avg_loss < self.best_vloss:
-                self.best_vloss = val_avg_loss
+                # Validate model.
+                start_time = time()
+                val_avg_loss = self._validate_one_epoch(val_loader)
+                epoch_val_time = time() - start_time
 
-            current_lr = self.optimizer.param_groups[0]['lr']
-            self.writer.add_scalar('Learning rate', current_lr, self.epoch + 1)
+                val_precision, val_recall, val_f1 = self._compute_and_reset_metrics()
 
-            # Save checkpoint.
-            torch.save({
-                'epoch': self.epoch + 1,
-                'model_state_dict': self.model.state_dict(),
-                'optimizer_state_dict': self.optimizer.state_dict(),
-                'one_cycle_state_dict': self.sheduler_one_cycle.state_dict(),
-                'plateau_state_dict': self.sheduler_plateau.state_dict(),
-            }, os.path.join(self.save_path, f"{self.model_name}_checkpoint_{self.timestamp}_epoch_{self.epoch + 1}.pth"))
+                self.writer.add_scalar('Loss/validation', val_avg_loss, self.epoch + 1)
+                self.writer.add_scalar('Precision/validation', val_precision, self.epoch + 1)
+                self.writer.add_scalar('Recall/validation', val_recall, self.epoch + 1)
+                self.writer.add_scalar('F1/validation', val_f1, self.epoch + 1)
 
-            # Log loss and metrics.
-            print(f"\n Epoch {self.epoch + 1} - Training loss: {train_avg_loss:.3f}; Validation loss: {val_avg_loss:.3f}; lr: {current_lr:.2e}")
-            print(f"\t Training: precision: {train_precision:.3f}\t recall: {train_recall:.3f}\t F1: {train_f1:.3f}")
-            print(f"\t Validation: precision: {val_precision:.3f}\t recall: {val_recall:.3f}\t F1: {val_f1:.3f}")
-            print(f"Train time: {epoch_train_time:.3f}; validation time: {epoch_val_time:.3f}, total epoch time: {(epoch_train_time + epoch_val_time):.3f}\n")
+                # Remember best validation loss.
+                if val_avg_loss < self.best_vloss:
+                    self.best_vloss = val_avg_loss
 
-            torch.cuda.empty_cache()
-            self.epoch += 1
+                current_lr = self.optimizer.param_groups[0]['lr']
+                self.writer.add_scalar('Learning rate', current_lr, self.epoch + 1)
+
+                # Save checkpoint.
+                torch.save({
+                    'fold': self.fold,
+                    'epoch': self.epoch,
+                    'model_state_dict': self.model.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'one_cycle_state_dict': self.sheduler_one_cycle.state_dict(),
+                    'plateau_state_dict': self.sheduler_plateau.state_dict(),
+                }, os.path.join(self.save_path, f"{self.model_name}_checkpoint_{self.timestamp}_fold_{self.fold + 1}_epoch_{self.epoch + 1}.pth"))
+
+                # Log loss and metrics.
+                print(f"\n Fold {self.fold + 1}; Epoch {self.epoch + 1} - Training loss: {train_avg_loss:.3f}; Validation loss: {val_avg_loss:.3f}; lr: {current_lr:.2e}")
+                print(f"\t Training: precision: {train_precision:.3f}\t recall: {train_recall:.3f}\t F1: {train_f1:.3f}")
+                print(f"\t Validation: precision: {val_precision:.3f}\t recall: {val_recall:.3f}\t F1: {val_f1:.3f}")
+                print(f"Train time: {epoch_train_time:.3f}; validation time: {epoch_val_time:.3f}, total epoch time: {(epoch_train_time + epoch_val_time):.3f}\n")
+
+                torch.cuda.empty_cache()
+                self.epoch += 1
+
+            self.fold += 1
+            self.epoch = 0
         
         # Train end!
         self.writer.close()
@@ -232,14 +245,16 @@ class ClassificationModelTrainer():
 
         return precision, recall, f1
 
-    def _train_one_epoch(self):
+    def _train_one_epoch(self, loader):
+        total_batches = len(loader)
+        report_interval = max(1, total_batches // self.report_times)
         self.model.train(True)
         running_loss = 0.
         avg_loss = 0.
 
         start_time = time()
 
-        for i, data in enumerate(self.train_loader):
+        for i, data in enumerate(loader):
             inputs, labels = data
             inputs = inputs.to(self.model.device, non_blocking=True)
             labels = labels.to(self.model.device, non_blocking=True)
@@ -276,24 +291,25 @@ class ClassificationModelTrainer():
             self.f1_metric.update(labels_pred, labels_true)
 
             # Report 20 times per epoch
-            if i % self.report_interval == self.report_interval - 1:
-                time_per_batch = (time() - start_time) / self.report_interval
-                avg_loss = running_loss / self.report_interval
+            if i % report_interval == report_interval - 1:
+                time_per_batch = (time() - start_time) / report_interval
+                avg_loss = running_loss / report_interval
 
-                print(f'\t batch [{i + 1}/{self.train_batches}] - loss: {avg_loss:.5f}\t time per batch: {time_per_batch:.2f}')
-                tb_x = self.epoch * self.train_batches + i + 1
+                print(f'\t batch [{i + 1}/{total_batches}] - loss: {avg_loss:.5f}\t time per batch: {time_per_batch:.2f}')
+                tb_x = self.epoch * total_batches + i + 1
                 self.writer.add_scalar('Loss/train', avg_loss, tb_x)
                 running_loss = 0.
                 start_time = time()
 
         return avg_loss
 
-    def _validate_one_epoch(self):
+    def _validate_one_epoch(self, loader):
         self.model.eval()  # Set the model to evaluation mode
+        val_batches = len(loader)
         running_loss = 0.
 
         with torch.no_grad():
-            for i, data in enumerate(self.val_loader):
+            for i, data in enumerate(loader):
                 inputs, labels = data
                 inputs = inputs.to(self.model.device, non_blocking=True)
                 labels = labels.to(self.model.device, non_blocking=True)
@@ -316,7 +332,7 @@ class ClassificationModelTrainer():
                 self.recall_metric.update(labels_pred, labels_true)
                 self.f1_metric.update(labels_pred, labels_true)
 
-        val_avg_loss = running_loss / self.val_batches
+        val_avg_loss = running_loss / val_batches
         return val_avg_loss
 
 

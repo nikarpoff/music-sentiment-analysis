@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 from argparse import ArgumentParser
 from sklearn.preprocessing import MinMaxScaler
-from model.data import load_specs_dataset
+from model.data import KFoldSpecsDataLoader
 from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer
 from model.utils import ClassificationModelTrainer, evaluate_model
 
@@ -121,6 +121,7 @@ if __name__ == "__main__":
     epochs = int(os.getenv(f"{model_type.upper()}_EPOCHS", 10))
     l2_reg = float(os.getenv(f"{model_type.upper()}_L2_REG", 0.01))
     total_moods = int(os.getenv("TOTAL_MOODS", 59))
+    kfold_splits = int(os.getenv("KFOLD_SPLITS", 5))
 
     # Set the dataset name based on the moods number.
     dataset_name = "dataset_all_moods.tsv" if moods_number == 0 else f"dataset_{moods_number}_moods.tsv"
@@ -142,10 +143,9 @@ if __name__ == "__main__":
         transform_specs, min_amp, _ = get_specs_scaler(os.path.join(outputs_path, "melspecs_stats.json"))
 
         # Load the dataset.
-        train_loader, val_loader, test_loader = load_specs_dataset(dataset_path, dataset_name, device, target_mode, pad_value=min_amp,
-                                                                   batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len,
-                                                                   num_workers=4, val_size=0.2, test_size=0.2,
-                                                                   transform_specs=transform_specs, random_state=7)
+        kfold_dataloader = KFoldSpecsDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=min_amp,
+                                                batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
+                                                num_workers=4, test_size=0.2, transform_specs=transform_specs, random_state=7)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -161,8 +161,9 @@ if __name__ == "__main__":
     if task_type == "train" or task_type == "ctrain":
         trainer = ClassificationModelTrainer(
             model, model_name=model_type, num_classes=output_dim, save_path=save_path,
-            target_mode=target_mode, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
-            epochs=epochs, l2_reg=l2_reg)
+            target_mode=target_mode, kfold_loader=kfold_dataloader, lr=learning_rate,
+            epochs=epochs, l2_reg=l2_reg
+        )
 
     if task_type == "train":
         # In train we starts with new model.
@@ -173,6 +174,9 @@ if __name__ == "__main__":
         # In test we use trained model.
         model.load_state_dict(torch.load(os.path.join(save_path, model_name), weights_only=True))
         print(f"Loaded model:\n", model)
+
+        test_loader = kfold_dataloader.get_test_loader()
+
         evaluate_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
     elif task_type == "ctrain":
         trainer.init_continue_train(saved_model_name=model_name)
