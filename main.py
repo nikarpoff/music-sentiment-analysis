@@ -25,7 +25,7 @@ from argparse import ArgumentParser
 from sklearn.preprocessing import MinMaxScaler
 from model.data import load_specs_dataset
 from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer
-from model.utils import train_model, evaluate_model
+from model.utils import ClassificationModelTrainer, evaluate_model
 
 
 def cli_arguments_preprocess() -> str:
@@ -158,22 +158,24 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
+    if task_type == "train" or task_type == "ctrain":
+        trainer = ClassificationModelTrainer(
+            model, model_name=model_type, num_classes=output_dim, save_path=save_path,
+            target_mode=target_mode, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
+            epochs=epochs, l2_reg=l2_reg)
+
     if task_type == "train":
         # In train we starts with new model.
         print(f"Built model:\n", model)
-        train_model(model, model_name=model_type, num_classes=output_dim, save_path=save_path,
-                    target_mode=target_mode, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
-                    epochs=epochs, l2_reg=l2_reg)
-    else:
-        # In other tasks we use trained model.
+        trainer.init_new_train()
+        trainer.train_model()
+    elif task_type == "test":
+        # In test we use trained model.
         model.load_state_dict(torch.load(os.path.join(save_path, model_name), weights_only=True))
         print(f"Loaded model:\n", model)
-
-    if task_type == "test":
         evaluate_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
     elif task_type == "ctrain":
-        train_model(model, model_name=model_type, num_classes=output_dim, save_path=save_path,
-                    target_mode=target_mode, train_loader=train_loader, val_loader=val_loader, lr=learning_rate,
-                    epochs=epochs, l2_reg=l2_reg)
+        trainer.init_continue_train(saved_model_name=model_name)
+        trainer.train_model()
     else:
         raise ValueError(f"Unknown task type: {task_type}")
