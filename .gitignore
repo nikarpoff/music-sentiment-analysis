@@ -2,6 +2,9 @@
 outputs/
 runs/
 
+# Citical data
+api_keys.json
+
 # VS Code
 .vscode/
 

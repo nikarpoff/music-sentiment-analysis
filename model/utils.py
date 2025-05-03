@@ -172,9 +172,11 @@ class ClassificationModelTrainer():
 
                 train_precision, train_recall, train_f1 = self._compute_and_reset_metrics()
 
-                self.writer.add_scalar('Precision/train', train_precision, self.epoch + 1)
-                self.writer.add_scalar('Recall/train', train_recall, self.epoch + 1)
-                self.writer.add_scalar('F1/train', train_f1, self.epoch + 1)
+                current_iteration = (self.fold * self.epochs) + self.epoch + 1
+
+                self.writer.add_scalar('Precision/train', train_precision, current_iteration)
+                self.writer.add_scalar('Recall/train', train_recall, current_iteration)
+                self.writer.add_scalar('F1/train', train_f1, current_iteration)
 
                 # Validate model.
                 start_time = time()
@@ -183,17 +185,17 @@ class ClassificationModelTrainer():
 
                 val_precision, val_recall, val_f1 = self._compute_and_reset_metrics()
 
-                self.writer.add_scalar('Loss/validation', val_avg_loss, self.epoch + 1)
-                self.writer.add_scalar('Precision/validation', val_precision, self.epoch + 1)
-                self.writer.add_scalar('Recall/validation', val_recall, self.epoch + 1)
-                self.writer.add_scalar('F1/validation', val_f1, self.epoch + 1)
+                self.writer.add_scalar('Loss/validation', val_avg_loss, current_iteration)
+                self.writer.add_scalar('Precision/validation', val_precision, current_iteration)
+                self.writer.add_scalar('Recall/validation', val_recall, current_iteration)
+                self.writer.add_scalar('F1/validation', val_f1, current_iteration)
 
                 # Remember best validation loss.
                 if val_avg_loss < self.best_vloss:
                     self.best_vloss = val_avg_loss
 
                 current_lr = self.optimizer.param_groups[0]['lr']
-                self.writer.add_scalar('Learning rate', current_lr, self.epoch + 1)
+                self.writer.add_scalar('Learning rate', current_lr, current_iteration)
 
                 # Save checkpoint.
                 torch.save({

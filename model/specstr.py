@@ -89,11 +89,11 @@ class SpectrogramTransformer(nn.Module):
         self.device = device
 
         # Model params
-        CNN_OUT_CHANNELS = 256
-        RNN_UNITS = 128
+        CNN_OUT_CHANNELS = 512
+        RNN_UNITS = 256
         TRANSFORMER_DEPTH = 256
         NHEAD = 16
-        NUM_ENCODERS = 6
+        NUM_ENCODERS = 4
 
         # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
         self.cnn = nn.Sequential(
@@ -107,7 +107,12 @@ class SpectrogramTransformer(nn.Module):
             nn.GELU(),
             nn.MaxPool1d(kernel_size=2),
 
-            nn.Conv1d(in_channels=256, out_channels=CNN_OUT_CHANNELS, kernel_size=3, padding=2),
+            nn.Conv1d(in_channels=256, out_channels=512, kernel_size=3, padding=2),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=2),
+
+            nn.Conv1d(in_channels=512, out_channels=CNN_OUT_CHANNELS, kernel_size=3, padding=2),
             nn.BatchNorm1d(CNN_OUT_CHANNELS),
             nn.GELU(),
             nn.MaxPool1d(kernel_size=2)
