@@ -145,7 +145,8 @@ if __name__ == "__main__":
         # Load the dataset.
         kfold_dataloader = KFoldSpecsDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=min_amp,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
-                                                num_workers=4, test_size=0.2, transform_specs=transform_specs, random_state=7)
+                                                use_augmentation=True, num_workers=4, test_size=0.2,
+                                                transform_specs=transform_specs, random_state=None)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

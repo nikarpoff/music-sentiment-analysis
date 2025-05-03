@@ -22,6 +22,7 @@ from random import randint
 from ast import literal_eval
 from os import path as os_path
 
+import torchaudio.transforms as T
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
 
@@ -78,7 +79,7 @@ class KFoldSpecsDataLoader(Iterator):
     Truncates/paddes spectrogramms if required (if min_seq_len or max_seq_len provided).
     """
     def __init__(self, dataset_path: str, dataset_name: str, splits: int, target_mode: str, min_seq_len: None, max_seq_len: None,
-                pad_value=-90., test_size=0.2, batch_size=32, transform_specs: TransformerMixin = None,
+                pad_value=-90., test_size=0.2, batch_size=32, transform_specs: TransformerMixin = None, use_augmentation = True,
                 num_workers=8, random_state=None):
         """
         :param dataset_path: Path to the dataset directory.
@@ -116,6 +117,10 @@ class KFoldSpecsDataLoader(Iterator):
             self.prefetch_factor = 2
             self.persistent_workers = True
 
+        self.augmentation = None
+        if use_augmentation:
+            self.augmentation = SpecAugment(mask_value=pad_value)
+
         self.x_train, self.x_test, self.y_train, self.y_test = self._load_train_test()
         kf = KFold(n_splits=splits, shuffle=True, random_state=random_state)
 
@@ -143,8 +148,8 @@ class KFoldSpecsDataLoader(Iterator):
         y_val = self.y_train.iloc[val_indices]
 
         # Build loaders and return them.
-        train_loader = self._get_specs_loader(x_train, y_train)
-        val_loader = self._get_specs_loader(x_val, y_val)
+        train_loader = self._get_specs_loader(x_train, y_train, for_train=True)
+        val_loader = self._get_specs_loader(x_val, y_val, for_train=False)
 
         return train_loader, val_loader
 
@@ -158,7 +163,7 @@ class KFoldSpecsDataLoader(Iterator):
         self.start_fold = start
 
     def get_test_loader(self):
-        return self._get_specs_loader(self.x_test, self.y_test)
+        return self._get_specs_loader(self.x_test, self.y_test, for_train=False)
 
     def _load_train_test(self) -> tuple:
         """
@@ -178,9 +183,10 @@ class KFoldSpecsDataLoader(Iterator):
 
         return x_train, x_test, y_train, y_test
 
-    def _get_specs_loader(self, x, y):
+    def _get_specs_loader(self, x, y, for_train=True):
         dataset = MelspecsDataset(x, y, dataset_path=self.dataset_path, transform_specs=self.transform_specs,
-                                  max_seq_len=self.max_seq_len, min_seq_len=self.min_seq_len, pad_value=self.pad_value)
+                                  augmentation=self.augmentation, max_seq_len=self.max_seq_len, training=for_train,
+                                  min_seq_len=self.min_seq_len, pad_value=self.pad_value)
 
         return DataLoader(
             dataset,
@@ -201,10 +207,13 @@ class MelspecsDataset(Dataset):
     """
     Loader of mel-spectrograms dataset.
     """
-    def __init__(self, x, y, dataset_path, min_seq_len, max_seq_len, pad_value, transform_specs: TransformerMixin = None):
+    def __init__(self, x, y, dataset_path, min_seq_len, max_seq_len, pad_value, training = True,
+                 transform_specs: TransformerMixin = None, augmentation: TransformerMixin = None):
         self.x = x
         self.y = y
         self.dataset_path = dataset_path
+        self.training = training
+        self.augmentation = augmentation
         self.transform_specs = transform_specs
         self.min_seq_len = min_seq_len
         self.max_seq_len = max_seq_len
@@ -222,6 +231,10 @@ class MelspecsDataset(Dataset):
             spec = self.pad_spec(spec)  # pad spec if required
         elif self.max_seq_len is not None and spec.shape[1] > self.max_seq_len:
             spec = self.truncate_spec(spec)  # truncate spec if required
+
+        # Apply augmentation. Use audio augmentation before scaling/normalization!
+        if self.augmentation and self.training:
+            spec = self.augmentation.transform(spec)
 
         # Apply transformation to the mel spectrogram if specified
         if self.transform_specs:
@@ -246,3 +259,63 @@ class MelspecsDataset(Dataset):
         """
         start = randint(0, spec.shape[1] - self.max_seq_len)
         return spec[:, start:start + self.max_seq_len]
+
+class SpecAugment(TransformerMixin):
+    """
+    Spectrograms augmentation. Performs random Gaussian noise, applies masking and gain with some probability.
+    Works with unscaled spectrograms in decibels (dB).
+    """
+    def __init__(self, freq_mask_param=6, time_mask_param=64, mask_value=-90., p_f=0.3, p_t=0.3, p_g=0.3):
+        self.p_f = p_f
+        self.p_t = p_t
+        self.p_g = p_g
+
+        self.mask_value = mask_value
+        self.freq_mask = T.FrequencyMasking(freq_mask_param)
+        self.time_mask = T.TimeMasking(time_mask_param)
+        self.randomGain = RandomGain()
+        self.gaussianNoise = GaussianNoise(std=0.4)
+
+    def transform(self, spec: np.ndarray) -> np.ndarray:
+        spec = self.gaussianNoise(spec)
+
+        # Apply gain with probability p_g.
+        if np.random.rand() < self.p_g:
+            spec = self.randomGain(spec)
+
+        spec_tensor = torch.from_numpy(spec).float()
+
+        # Apply frequency masking with probability p_f.
+        if np.random.rand() < self.p_f:
+            spec_tensor = self.freq_mask(spec_tensor, mask_value=self.mask_value)
+        
+        # Apply time masking with probability p_t.
+        if np.random.rand() < self.p_t:
+            spec_tensor = self.time_mask(spec_tensor, mask_value=self.mask_value)
+        
+        return spec_tensor.numpy()
+
+class RandomGain():
+    """
+    Applyes random gain to the spectrogram.
+    """
+    def __init__(self, min_gain_dB=-5, max_gain_dB=5):
+        self.min_gain = min_gain_dB
+        self.max_gain = max_gain_dB
+
+    def __call__(self, spec: np.ndarray) -> np.ndarray:
+        gain = np.random.uniform(self.min_gain, self.max_gain)
+        return spec + gain
+    
+class GaussianNoise():
+    """
+    Applyes random noise to the spectrogram.
+    """
+    def __init__(self, mean=0.0, std=1.0):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, spec: np.ndarray) -> np.ndarray:
+        noise = np.random.normal(self.mean, self.std, spec.shape)
+        return spec + noise
+    

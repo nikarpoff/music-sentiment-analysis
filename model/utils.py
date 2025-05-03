@@ -298,8 +298,8 @@ class ClassificationModelTrainer():
                 avg_loss = running_loss / report_interval
 
                 print(f'\t batch [{i + 1}/{total_batches}] - loss: {avg_loss:.5f}\t time per batch: {time_per_batch:.2f}')
-                tb_x = self.epoch * total_batches + i + 1
-                self.writer.add_scalar('Loss/train', avg_loss, tb_x)
+                current_step = ((self.fold * self.epochs) + self.epoch) * total_batches + i
+                self.writer.add_scalar('Loss/train', avg_loss, current_step)
                 running_loss = 0.
                 start_time = time()
 
