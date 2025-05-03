@@ -137,10 +137,10 @@ class ClassificationModelTrainer():
 
             self.kfold_loader.set_start(self.fold)  # start loading folds from checkpoint's fold
 
-            match = re.search(r"checkpoint_(\d{6})_(\d{6})_epoch_(\d+)\.", saved_model_name)
+            match = re.search(r".*?(\d{6})_(\d{6}).*", saved_model_name)
 
             if match:
-                date_str, time_str, _ = match.groups()
+                date_str, time_str = match.groups()
                 self.start_timestamp = datetime.strptime(f"{date_str}_{time_str}", TIMESTAMP_FORMAT)
             else:
                 print(f"Invalid checkpoint file name: expected '{self.model_name}_checkpoint_<{TIMESTAMP_FORMAT}>_fold_<number>_epoch_<number>', found: {saved_model_name}")
