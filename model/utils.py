@@ -70,7 +70,7 @@ class ClassificationModelTrainer():
             self.recall_metric = MulticlassRecall(num_classes=num_classes, average='macro').to(model.device)
             self.f1_metric = MulticlassF1Score(num_classes=num_classes, average='macro').to(model.device)
 
-            self.loss_function = torch.nn.CrossEntropyLoss()
+            self.loss_function = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
             self.is_multilabel = False
         elif target_mode == "multilabel":
             self.precision_metric = MultilabelPrecision(num_labels=num_classes, average='micro').to(model.device)
