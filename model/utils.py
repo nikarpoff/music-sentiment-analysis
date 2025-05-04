@@ -59,30 +59,8 @@ class ClassificationModelTrainer():
         self.best_vloss = float('inf')
         self.folds = len(kfold_loader)
         self.report_times = 20
-        
-        # AdamW optimizer. Use weigth decay and adaptive learning rate.
-        self.optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=l2_reg)
-
-        # Sheduler 1: OneCycleLR (per batch)
-        total_steps = epochs * self.folds * kfold_loader.get_train_len()
-        self.sheduler_one_cycle = torch.optim.lr_scheduler.OneCycleLR(
-            self.optimizer,
-            max_lr=lr * 10,
-            total_steps=total_steps,
-            pct_start=0.3,          # 30% for warm-up
-            div_factor=1e3,         # div factor for start lr
-            final_div_factor=1e4,   # div factor for final lr
-            anneal_strategy='cos'   # cos strategy for decrease lr
-        )
-
-        # Scheduler 2: ReduceLROnPlateau (per epoch)
-        self.sheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer,
-            mode='min',     # minimize loss
-            factor=0.5,     # div factor for lr
-            patience=2,     # epochs number without improvement (after decrease lr)
-            min_lr=1e-7     # min available lr
-        )
+        self.l2_reg = l2_reg
+        self.lr = lr
 
         self.cuda_scaler = torch.cuda.amp.GradScaler()
 
@@ -125,6 +103,8 @@ class ClassificationModelTrainer():
         if "checkpoint" in saved_model_name:
             ckpt = torch.load(saved_model_path, map_location=self.model.device)
             self.model.load_state_dict(ckpt["model_state_dict"])
+            self._recreate_optimizer_and_shedulers(1)
+
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             self.sheduler_one_cycle.load_state_dict(ckpt["one_cycle_state_dict"])
             self.sheduler_plateau.load_state_dict(ckpt["plateau_state_dict"])
@@ -161,6 +141,10 @@ class ClassificationModelTrainer():
 
         # For every fold.
         for train_loader, val_loader in self.kfold_loader:
+            # If epoch is 0 (we start not from checkpoint) then recreate shedulers and AdamW
+            if self.epoch == 0:
+                self._recreate_optimizer_and_shedulers(len(train_loader))
+
             # And for every epoch.
             while self.epoch < self.epochs:
                 print(f"Fold {self.fold + 1}/{self.folds}; Epoch {self.epoch + 1}/{self.epochs}")
@@ -246,6 +230,31 @@ class ClassificationModelTrainer():
         self.f1_metric.reset()
 
         return precision, recall, f1
+
+    def _recreate_optimizer_and_shedulers(self, epoch_steps) -> None:
+        # AdamW optimizer. Use weigth decay and adaptive learning rate.
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.l2_reg)
+
+        # Sheduler 1: OneCycleLR (per batch)
+        fold_steps = self.epochs * epoch_steps
+        self.sheduler_one_cycle = torch.optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=self.lr * 5,
+            total_steps=fold_steps,
+            pct_start=0.3,          # 30% for warm-up
+            div_factor=1e2,         # div factor for start lr
+            final_div_factor=1e4,   # div factor for final lr
+            anneal_strategy='cos'   # cos strategy for decrease lr
+        )
+
+        # Scheduler 2: ReduceLROnPlateau (per epoch)
+        self.sheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',     # minimize loss
+            factor=0.5,     # div factor for lr
+            patience=2,     # epochs number without improvement (after decrease lr)
+            min_lr=1e-7     # min available lr
+        )
 
     def _train_one_epoch(self, loader):
         total_batches = len(loader)
