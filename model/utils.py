@@ -325,9 +325,8 @@ class ClassificationModelTrainer():
                 inputs = inputs.to(self.model.device, non_blocking=True)
                 labels = labels.to(self.model.device, non_blocking=True)
 
-                with torch.cuda.amp.autocast():
-                    outputs = self.model(inputs)
-                    loss = self.loss_function(outputs, labels)
+                outputs = self.model(inputs)
+                loss = self.loss_function(outputs, labels)
 
                 running_loss += loss
 

@@ -41,6 +41,55 @@ class PositionalEncoding(nn.Module):
         return "Positional sinusoidal encoding"
 
 
+class ResidualConv1D(nn.Module):
+    """
+    ResNet-like architecture with two Conv1D and residual connection.
+    Kernel size, padding and stride are chosen in such a way that there is no reduction in the seq_len.
+    """
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dropout=0.0):
+        super().__init__()
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding, bias=False)
+        self.bn1   = nn.BatchNorm1d(out_channels)
+        self.act1  = nn.GELU()
+        
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=1, padding=padding, bias=False)
+        self.bn2   = nn.BatchNorm1d(out_channels)
+        
+        # If in_channels != out_channels then apply 1x1 convolution (for identity=x).
+        self.identity_projection = None
+        if in_channels != out_channels:
+            self.identity_projection = nn.Sequential(
+                nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False),
+                nn.BatchNorm1d(out_channels)
+            )
+        
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.act2 = nn.GELU()
+    
+    def forward(self, x):
+        identity = x
+        
+        # First convolution
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.act1(out)
+        
+        # Second convolution
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        # Projection (if required)
+        if self.identity_projection is not None:
+            identity = self.identity_projection(identity)
+        
+        # Residual connection and out activation
+        out = out + identity
+        out = self.act2(out)
+        out = self.dropout(out)
+
+        return out
+
+
 class SpectrogramPureTransformer(nn.Module):
     def __init__(self, output_dim: int, device='cuda'):
         super().__init__()
@@ -89,33 +138,28 @@ class SpectrogramTransformer(nn.Module):
         self.device = device
 
         # Model params
-        CNN_OUT_CHANNELS = 512
+        CNN_OUT_CHANNELS = 1024
         RNN_UNITS = 256
         TRANSFORMER_DEPTH = 256
         NHEAD = 16
-        NUM_ENCODERS = 4
+        NUM_ENCODERS = 6
 
         # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
         self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels=96, out_channels=128, kernel_size=3, padding=2),
-            nn.BatchNorm1d(128),
-            nn.GELU(),
+            ResidualConv1D(in_channels=96, out_channels=128, dropout=0.2),
+            nn.MaxPool1d(kernel_size=4, stride=2),
+
+            ResidualConv1D(in_channels=128, out_channels=256, dropout=0.2),
             nn.MaxPool1d(kernel_size=2),
 
-            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=2),
-            nn.BatchNorm1d(256),
-            nn.GELU(),
+            ResidualConv1D(in_channels=256, out_channels=512, dropout=0.2),
             nn.MaxPool1d(kernel_size=2),
 
-            nn.Conv1d(in_channels=256, out_channels=512, kernel_size=3, padding=2),
-            nn.BatchNorm1d(512),
-            nn.GELU(),
+            ResidualConv1D(in_channels=512, out_channels=1024, dropout=0.2),
             nn.MaxPool1d(kernel_size=2),
 
-            nn.Conv1d(in_channels=512, out_channels=CNN_OUT_CHANNELS, kernel_size=3, padding=2),
-            nn.BatchNorm1d(CNN_OUT_CHANNELS),
-            nn.GELU(),
-            nn.MaxPool1d(kernel_size=2)
+            ResidualConv1D(in_channels=1024, out_channels=CNN_OUT_CHANNELS, dropout=0.2),
+            nn.MaxPool1d(kernel_size=2),
         )
         # Output of CNN is (batch, d_model, new_sequence_length)
 
