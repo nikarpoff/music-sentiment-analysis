@@ -138,7 +138,7 @@ class SpectrogramTransformer(nn.Module):
         self.device = device
 
         # Model params
-        CNN_OUT_CHANNELS = 1024
+        CNN_OUT_CHANNELS = 512
         RNN_UNITS = 256
         TRANSFORMER_DEPTH = 256
         NHEAD = 16
@@ -146,19 +146,19 @@ class SpectrogramTransformer(nn.Module):
 
         # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
         self.cnn = nn.Sequential(
-            ResidualConv1D(in_channels=96, out_channels=128, dropout=0.2),
+            ResidualConv1D(in_channels=96, out_channels=128, dropout=0.1),
             nn.MaxPool1d(kernel_size=4, stride=2),
 
-            ResidualConv1D(in_channels=128, out_channels=256, dropout=0.2),
+            ResidualConv1D(in_channels=128, out_channels=256, dropout=0.1),
             nn.MaxPool1d(kernel_size=2),
 
-            ResidualConv1D(in_channels=256, out_channels=512, dropout=0.2),
+            ResidualConv1D(in_channels=256, out_channels=512, dropout=0.1),
             nn.MaxPool1d(kernel_size=2),
 
-            ResidualConv1D(in_channels=512, out_channels=1024, dropout=0.2),
+            ResidualConv1D(in_channels=512, out_channels=512, dropout=0.1),
             nn.MaxPool1d(kernel_size=2),
 
-            ResidualConv1D(in_channels=1024, out_channels=CNN_OUT_CHANNELS, dropout=0.2),
+            ResidualConv1D(in_channels=512, out_channels=CNN_OUT_CHANNELS, dropout=0.1),
             nn.MaxPool1d(kernel_size=2),
         )
         # Output of CNN is (batch, d_model, new_sequence_length)
@@ -178,13 +178,14 @@ class SpectrogramTransformer(nn.Module):
         self.pos_encoder = PositionalEncoding(TRANSFORMER_DEPTH)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=TRANSFORMER_DEPTH,
+            dim_feedforward=TRANSFORMER_DEPTH * 4,
             nhead=NHEAD,
             dropout=dropout,
             activation='gelu',
             batch_first=True,
-            norm_first=False
+            norm_first=True     # LayerNorm first
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_ENCODERS)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_ENCODERS, enable_nested_tensor=False)
 
         self.attention_pool = nn.Sequential(
             nn.Linear(TRANSFORMER_DEPTH, TRANSFORMER_DEPTH//2),

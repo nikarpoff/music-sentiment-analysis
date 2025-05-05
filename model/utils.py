@@ -62,7 +62,7 @@ class ClassificationModelTrainer():
         self.l2_reg = l2_reg
         self.lr = lr
 
-        self.cuda_scaler = torch.cuda.amp.GradScaler()
+        self.cuda_scaler = torch.amp.GradScaler("cuda")
 
         # Select metrics, loss by type of classification task.
         if target_mode == "onehot":
@@ -272,7 +272,7 @@ class ClassificationModelTrainer():
 
             self.optimizer.zero_grad()
 
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 outputs = self.model(inputs)
                 loss = self.loss_function(outputs, labels)
 
