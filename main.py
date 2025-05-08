@@ -23,9 +23,11 @@ from dotenv import load_dotenv
 
 from argparse import ArgumentParser
 from sklearn.preprocessing import MinMaxScaler
+
+from config import *
 from model.data import KFoldSpecsDataLoader
-from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer
-from model.utils import ClassificationModelTrainer, evaluate_model
+from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer, SpectrogramMaskedAutoEncoder
+from model.utils import ModelTrainer, evaluate_model
 
 
 def cli_arguments_preprocess() -> str:
@@ -42,7 +44,8 @@ def cli_arguments_preprocess() -> str:
                         help="Path to source dataset")
     
     parser.add_argument("--model", required=True,
-                        choices=["pure_specstr", "prelearned_specstr", "specstr"],
+                        choices=[PURE_SPECSTR, SPECSTR, SPECS_AUTOENCODER,
+                                 PRELEARNED_SPECSTR],
                         help="Type of machine learning model to be used")
     
     parser.add_argument("--task", required=True,
@@ -129,13 +132,15 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Select the target transformation based on the target mode.
-    if moods_number == 0:
-        target_mode = "multilabel"
+    if model_type in AUTOENCODER_MODELS:
+        target_mode = AUTOENCODER_TARGET
+    elif model_type in CLASSIFICATION_MODELS and moods_number == 0:
+        target_mode = MULTILABEL_TARGET
     else:
-        target_mode = "onehot"
+        target_mode = ONE_HOT_TARGET
 
     # Load required dataset.
-    if model_type == "pure_specstr" or model_type == "prelearned_specstr" or model_type == "specstr":
+    if model_type in SPECS_MODELS:
         max_seq_len = int(os.getenv(f"{model_type.upper()}_MAX_SEQ_LEN", 25000))
         min_seq_len = int(os.getenv(f"{model_type.upper()}_MIN_SEQ_LEN", 1000))
 
@@ -150,17 +155,22 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
+    # Build required model.
     if model_type == "specstr":
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
 
         model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
+    elif model_type == "specs_autoencoder":
+        dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
+
+        model = SpectrogramMaskedAutoEncoder(dropout=dropout, device=device).to(device)
     elif model_type == "pure_specstr":
         model = SpectrogramPureTransformer(output_dim=output_dim, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
     if task_type == "train" or task_type == "ctrain":
-        trainer = ClassificationModelTrainer(
+        trainer = ModelTrainer(
             model, model_name=model_type, num_classes=output_dim, save_path=save_path,
             target_mode=target_mode, kfold_loader=kfold_dataloader, lr=learning_rate,
             epochs=epochs, l2_reg=l2_reg

@@ -28,7 +28,9 @@ from torch.utils.data import Dataset, DataLoader
 
 from sklearn.base import TransformerMixin
 from sklearn.model_selection import KFold, train_test_split
-from sklearn.preprocessing import OneHotEncoder, MultiLabelBinarizer
+from sklearn.preprocessing import OneHotEncoder, MultiLabelBinarizer, LabelEncoder
+
+from config import *
 
 
 def one_hot_encode_labels(labels: pd.DataFrame) -> pd.DataFrame:
@@ -51,7 +53,15 @@ def multi_label_binarize(labels: pd.Series) -> pd.Series:
     binarized_labels = encoder.fit_transform(labels)
     return binarized_labels
 
-def melspecs_collate_fn(batch):
+def label_encode(labels: pd.DataFrame) -> pd.DataFrame:
+    """
+    Simple label encoding.
+    """
+    encoder = LabelEncoder()
+    encoded_labels = encoder.fit_transform(labels)
+    return encoded_labels
+
+def melspecs_classify_collate_fn(batch):
     """
     Custom collaction function with padding to maximum sequence length inside the batch
     """
@@ -68,6 +78,20 @@ def melspecs_collate_fn(batch):
 
     return xs_padded, ys
 
+def melspecs_autoencode_collate_fn(batch):
+    """
+    Custom collaction function with y = spec output
+    """
+    xs, _ = zip(*batch)
+    xs = [x.permute(1, 0) for x in xs] 
+
+    # Padding by maximum seq_len.
+    xs_padded = pad_sequence(xs, batch_first=True, padding_value=0.)
+
+    # Return initial dimensions order (batch, channel, time)
+    xs_padded = xs_padded.permute(0, 2, 1)
+
+    return xs_padded, xs_padded
 
 class KFoldSpecsDataLoader(Iterator):
     """
@@ -172,18 +196,23 @@ class KFoldSpecsDataLoader(Iterator):
         df = pd.read_csv(self.full_dataset_path, sep='\t')
 
         # Select the target transformation based on the target mode.
-        if self.target_mode == "multilabel":
+        if self.target_mode == MULTILABEL_TARGET:
             y = pd.DataFrame(multi_label_binarize(df['tags'].apply(literal_eval)))  # process the labels, apply literal_eval to convert strings to lists
-        elif self.target_mode == "onehot":
+        elif self.target_mode == ONE_HOT_TARGET:
             y = pd.DataFrame(one_hot_encode_labels(df['tags'].to_frame()))  # process the labels to one-hot vectors
         else:
-            raise ValueError("Invalid target mode. Choose 'multilabel' or 'onehot'.")
+            y = pd.DataFrame(label_encode(df['tags']))  # simple label encoding
 
         x_train, x_test, y_train, y_test = train_test_split(df, y, test_size=self.test_size, random_state=self.random_state)
 
         return x_train, x_test, y_train, y_test
 
     def _get_specs_loader(self, x, y, for_train=True):
+        if self.target_mode == AUTOENCODER_TARGET:
+            collate_fn = melspecs_autoencode_collate_fn
+        else:
+            collate_fn = melspecs_classify_collate_fn
+
         dataset = MelspecsDataset(x, y, dataset_path=self.dataset_path, transform_specs=self.transform_specs,
                                   augmentation=self.augmentation, max_seq_len=self.max_seq_len, training=for_train,
                                   min_seq_len=self.min_seq_len, pad_value=self.pad_value)
@@ -196,7 +225,7 @@ class KFoldSpecsDataLoader(Iterator):
             num_workers=self.num_workers,
             prefetch_factor=self.prefetch_factor,
             persistent_workers=self.persistent_workers,
-            collate_fn=melspecs_collate_fn,
+            collate_fn=collate_fn,
         )
     
     def __len__(self):

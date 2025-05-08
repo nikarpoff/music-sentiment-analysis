@@ -146,19 +146,29 @@ class SpectrogramTransformer(nn.Module):
 
         # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
         self.cnn = nn.Sequential(
-            ResidualConv1D(in_channels=96, out_channels=128, dropout=0.1),
+            nn.Conv1d(in_channels=96, out_channels=128, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(128),
+            nn.GELU(),
             nn.MaxPool1d(kernel_size=4, stride=2),
 
-            ResidualConv1D(in_channels=128, out_channels=256, dropout=0.1),
+            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
             nn.MaxPool1d(kernel_size=2),
 
-            ResidualConv1D(in_channels=256, out_channels=512, dropout=0.1),
+            nn.Conv1d(in_channels=256, out_channels=512, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
             nn.MaxPool1d(kernel_size=2),
 
-            ResidualConv1D(in_channels=512, out_channels=512, dropout=0.1),
+            nn.Conv1d(in_channels=512, out_channels=512, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
             nn.MaxPool1d(kernel_size=2),
 
-            ResidualConv1D(in_channels=512, out_channels=CNN_OUT_CHANNELS, dropout=0.1),
+            nn.Conv1d(in_channels=512, out_channels=CNN_OUT_CHANNELS, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(CNN_OUT_CHANNELS),
+            nn.GELU(),
             nn.MaxPool1d(kernel_size=2),
         )
         # Output of CNN is (batch, d_model, new_sequence_length)
@@ -230,4 +240,210 @@ class SpectrogramTransformer(nn.Module):
         model_describe += "Transformer Encoder: " + str(self.transformer_encoder) + "\n"
         model_describe += "Attention pooling: " + str(self.attention_pool) + "\n" * 2
         model_describe += "Output projection: " + str(self.output_proj) + "\n" * 2
+        return model_describe
+
+
+class SpectrogramMaskedAutoEncoder(nn.Module):
+    def __init__(self, mask_ratio=0.8, dropout=0.2, device='cuda'):
+        super().__init__()
+        self.mask_ratio = mask_ratio
+        self.device = device
+
+        # Model params
+        INPUT_CHANNELS = 96
+        CNN_OUT_CHANNELS = 32
+        RNN_UNITS = 16
+        TRANSFORMER_DEPTH = 32
+        NHEAD = 8
+        NUM_ENCODER_LAYERS = 4
+        NUM_DECODER_LAYERS = 4
+        BIDIRECTIONAL_RNN = True
+
+        # --- Encoder ---
+        self.encoder = SpectrogramMaskedEncoder(INPUT_CHANNELS, CNN_OUT_CHANNELS, RNN_UNITS, TRANSFORMER_DEPTH, NHEAD, NUM_ENCODER_LAYERS,
+                                                bidirectional_rnn=BIDIRECTIONAL_RNN, mask_ratio=mask_ratio, dropout=dropout, device=device)
+
+        # --- Decoder ---
+        self.decoder = SpectrogramMaskedDecoder(INPUT_CHANNELS, CNN_OUT_CHANNELS, RNN_UNITS, TRANSFORMER_DEPTH,
+                                                NHEAD, NUM_DECODER_LAYERS, BIDIRECTIONAL_RNN, dropout=dropout, device=device)
+
+    def forward(self, spec):
+        """
+        spec: Tensor (batch, features, sequence)
+        returns: recon_spec (batch, features, sequence), mask (batch, inner_seq)
+        """
+        print(spec.shape)
+        encoded_vis_spec, masked_full_spec, mask = self.encoder(spec)
+        return self.decoder(masked_full_spec, encoded_vis_spec)
+    
+
+class SpectrogramMaskedEncoder(nn.Module):
+    def __init__(self, input_channels, cnn_out_channels, rnn_units, transformer_depth, nhead,
+                 num_encoder_layers, mask_ratio=0.8, bidirectional_rnn=True, dropout=0.2, device='cuda'):
+        super().__init__()
+        self.device = device
+        self.mask_ratio = mask_ratio
+
+        # Encoder with 1D convolution
+        self.cnn_encoder = nn.Sequential(
+            nn.Conv1d(in_channels=input_channels, out_channels=32, kernel_size=3, padding=1),
+            nn.BatchNorm1d(32),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=3, padding=1),
+
+            nn.Conv1d(in_channels=32, out_channels=cnn_out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm1d(cnn_out_channels),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=3, padding=1),
+        )
+        # Output of CNN is (batch, CNN_OUT_CHANNELS, new_sequence_length)
+
+        self.rnn_encoder = nn.GRU(cnn_out_channels, rnn_units, num_layers=2, batch_first=True,
+                                  dropout=dropout, bidirectional=bidirectional_rnn)
+
+        # Linear projection with layer normalization from RNN output to TRANSFORMER input
+        self.d_model_proj = nn.Sequential(
+            nn.Linear(rnn_units * 2, transformer_depth),
+            nn.LayerNorm(transformer_depth),
+            nn.Dropout(dropout),
+            nn.ReLU()
+        )
+
+        # Use sinusoidal positional encoding
+        self.pos_encoder = PositionalEncoding(transformer_depth)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=transformer_depth,
+            nhead=nhead,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=False
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+
+        # Trainable mask token (to avoid masking with padding value)
+        self.mask_token = nn.Parameter(torch.zeros(transformer_depth))
+
+    def forward(self, x):
+        # CNN specs encoding. Seq len decreasing
+        x = self.cnn_encoder(x)  # (batch, cnn_units, seq)
+        x = x.permute(0, 2, 1)  # (batch, seq, cnn_units)
+        
+        # RNN processing
+        x, _ = self.rnn_encoder(x)  # (batch, seq, rnn_units*2)
+        
+        # Project to transformer dimensions
+        x = self.d_model_proj(x)  # (batch, seq, d_model)
+        
+        # Generate random mask.
+        seq_len = x.size(1)
+
+        # AGenerate mask (single mask for all of batches)
+        num_vis = int(round(seq_len * (1 - self.mask_ratio)))
+        
+        perm = torch.randperm(seq_len, device=self.device)
+        vis_idx  = perm[:num_vis].argsort(dim=0)
+
+        mask = torch.zeros(seq_len, dtype=torch.bool, device=self.device)
+        mask[vis_idx] = True
+
+        # Apply mask for BxS along whole depth. Get unmasked and masked X.
+        x_vis = x[:, vis_idx, :]
+
+        x_masked = torch.empty_like(x)
+        i_x_vis = 0
+        for i in range(len(mask)):
+            if mask[i]:
+                x_masked[:, i, :] = x_vis[:, i_x_vis, :]
+                i_x_vis += 1
+            else:
+                x_masked[:, i, :] = self.mask_token
+
+        # Add positional encoding
+        x_enc = self.pos_encoder(x_vis)
+        
+        # Transformer processing
+        x_enc = self.transformer_encoder(x_enc)  # (batch, vis_seq, d_model)
+
+        return x_enc, x_masked, mask
+
+    def __str__(self):
+        model_describe = ""
+        model_describe += "CNN Encoder: " + str(self.cnn_encoder) + "\n" * 2
+        model_describe += "RNN Encoder: " + str(self.rnn_encoder) + "\n" * 2
+        model_describe += "Projection to transformer depth" + str(self.d_model_proj) + "\n" * 2
+        model_describe += str(self.pos_encoder) + "\n" * 2
+        model_describe += "Transformer Encoder: " + str(self.transformer_encoder) + "\n"
+        return model_describe
+
+
+class SpectrogramMaskedDecoder(nn.Module):
+    def __init__(self, input_channels, cnn_out_channels, rnn_units, transformer_depth,
+                 nhead, num_decoder_layers, bidirectional_rnn=True, dropout=0.2, device='cuda'):
+        super().__init__()
+        self.device = device
+
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=transformer_depth,
+            nhead=nhead,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=False
+        )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
+
+        self.rnn_decoder = nn.GRU(transformer_depth, rnn_units, num_layers=2, batch_first=True,
+                                  dropout=dropout, bidirectional=bidirectional_rnn)
+
+        # Linear projection with layer normalization from RNN output to CNN input
+        self.cnn_units_proj = nn.Sequential(
+            nn.Linear(rnn_units * 2, cnn_out_channels),
+            nn.LayerNorm(cnn_out_channels),
+            nn.Dropout(dropout),
+            nn.ReLU()
+        )
+
+        # Output of CNN decoder is (batch, IN_CHANNELS, IN_SEQ_LEN)
+        self.cnn_decoder = nn.Sequential(
+            nn.ConvTranspose1d(in_channels=cnn_out_channels, out_channels=32, kernel_size=3, stride=3, padding=1),
+            nn.BatchNorm1d(32),
+            nn.GELU(),
+
+            nn.ConvTranspose1d(in_channels=32, out_channels=input_channels, kernel_size=3, stride=3, padding=1),
+            nn.BatchNorm1d(input_channels),
+            nn.GELU(),
+        )
+
+    def forward(self, dec_in, enc_out):
+        # X(dec_in) - decoder masked input (batch, seq_len, d_model);
+        # Memory(enc_out) - encoder output (batch, vis_len, d_model).
+        x = self.transformer_decoder(dec_in, enc_out)  # (batch, seq, d_model)
+
+        print(x.shape)
+    
+        # RNN decoding
+        x, _ = self.rnn_decoder(x)  # (batch, seq, rnn_units)
+
+        print(x.shape)
+
+        # Projection from rnn_units to cnn_units.
+        x = self.cnn_units_proj(x)  # (batch, seq, cnn_units)
+        x = x.permute(0, 2, 1)  # (batch, cnn_units, seq)
+
+        print(x.shape)
+
+        # Final decoding. Increasing of the seq len.
+        x = self.cnn_decoder(x)
+
+        print(x.shape)
+        
+        return x
+
+    def __str__(self):
+        model_describe = ""
+        model_describe += "Transformer Decoder: " + str(self.transformer_decoder) + "\n"
+        model_describe += "RNN Decoder: " + str(self.rnn_decoder) + "\n" * 2
+        model_describe += "Projection to CNN depth" + str(self.cnn_units_proj) + "\n" * 2
+        model_describe += "CNN Decoder: " + str(self.cnn_decoder) + "\n" * 2
         return model_describe

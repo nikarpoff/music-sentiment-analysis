@@ -25,23 +25,21 @@ from torchmetrics.classification import (
     MultilabelPrecision, MultilabelRecall, MultilabelF1Score
 )
 
-
-TIMESTAMP_FORMAT = "%d%m%y_%H%M%S"
-DATE_FORMAT = "%d_%m_%y"
+from config import *
 
 
-class ClassificationModelTrainer():
+class ModelTrainer():
     """
     Model trainer. Save checkpoints and trained model to save_path.
-    Correctly works with two losses and tasks types: multilabel classification and single-label classification.
+    Correctly works with two losses and tasks types: multilabel classification, single-label classification, autoencoder regression
     """
-    def __init__(self, model, model_name: str, num_classes: int, save_path: str, target_mode: str, kfold_loader: KFoldSpecsDataLoader, lr: float, epochs: int, l2_reg: float):
+    def __init__(self, model, model_name: str, save_path: str, target_mode: str, kfold_loader: KFoldSpecsDataLoader, lr: float, epochs: int, l2_reg: float, num_classes: int = None):
         """
         :param model: Model to train.
         :param model_name: Name of the model (specstr, pure_specstr and e.t.c.).
-        :param num_classes: Number of moods to classify.
+        :param num_classes: Number of moods to classify. If None -> target_mode should not be classification.
         :param save_path: Path to save checkpoints and trained model.
-        :param task_type: Type of the task: multilabel classification or single-label classification.
+        :param task_type: Type of the task: multilabel classification, single-label classification or autoencoder regression.
         :param kfold_loader: Loader of train data. Iterable object with train/val loaders as elements.
         :param lr: learning rate.
         :param epochs: Number of train epochs.
@@ -52,6 +50,7 @@ class ClassificationModelTrainer():
         self.num_classes = num_classes
         self.save_path = save_path
         self.kfold_loader = kfold_loader
+        self.target_mode = target_mode
         self.epochs = epochs
 
         self.fold = 0
@@ -61,24 +60,29 @@ class ClassificationModelTrainer():
         self.report_times = 20
         self.l2_reg = l2_reg
         self.lr = lr
+        
+        if target_mode in CLASSIFICATION_TARGETS and num_classes is None:
+            raise ValueError(f"With target mode {target_mode} expects num_classes, but got None")
 
         self.cuda_scaler = torch.amp.GradScaler("cuda")
 
         # Select metrics, loss by type of classification task.
-        if target_mode == "onehot":
+        if target_mode == ONE_HOT_TARGET:
             self.precision_metric = MulticlassPrecision(num_classes=num_classes, average='macro').to(model.device)
             self.recall_metric = MulticlassRecall(num_classes=num_classes, average='macro').to(model.device)
             self.f1_metric = MulticlassF1Score(num_classes=num_classes, average='macro').to(model.device)
 
             self.loss_function = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
             self.is_multilabel = False
-        elif target_mode == "multilabel":
+        elif target_mode == MULTILABEL_TARGET:
             self.precision_metric = MultilabelPrecision(num_labels=num_classes, average='micro').to(model.device)
             self.recall_metric = MultilabelRecall(num_labels=num_classes, average='micro').to(model.device)
             self.f1_metric = MultilabelF1Score(num_labels=num_classes, average='micro').to(model.device)
 
             self.loss_function = torch.nn.BCEWithLogitsLoss()
             self.is_multilabel = True
+        elif target_mode == AUTOENCODER_TARGET:
+            self.loss_function = torch.nn.MSELoss()
         else:
             raise ValueError(f"Unknown target mode provided: {target_mode}")
         
@@ -153,26 +157,28 @@ class ClassificationModelTrainer():
                 start_time = time()
                 train_avg_loss = self._train_one_epoch(train_loader)
                 epoch_train_time = time() - start_time
-
-                train_precision, train_recall, train_f1 = self._compute_and_reset_metrics()
-
                 current_iteration = (self.fold * self.epochs) + self.epoch + 1
 
-                self.writer.add_scalar('Precision/train', train_precision, current_iteration)
-                self.writer.add_scalar('Recall/train', train_recall, current_iteration)
-                self.writer.add_scalar('F1/train', train_f1, current_iteration)
+                if self.target_mode in CLASSIFICATION_TARGETS:
+                    train_precision, train_recall, train_f1 = self._compute_and_reset_metrics()
+
+                    self.writer.add_scalar('Precision/train', train_precision, current_iteration)
+                    self.writer.add_scalar('Recall/train', train_recall, current_iteration)
+                    self.writer.add_scalar('F1/train', train_f1, current_iteration)
 
                 # Validate model.
                 start_time = time()
                 val_avg_loss = self._validate_one_epoch(val_loader)
                 epoch_val_time = time() - start_time
 
-                val_precision, val_recall, val_f1 = self._compute_and_reset_metrics()
+                if self.target_mode in CLASSIFICATION_TARGETS:
+                    val_precision, val_recall, val_f1 = self._compute_and_reset_metrics()
+
+                    self.writer.add_scalar('Precision/validation', val_precision, current_iteration)
+                    self.writer.add_scalar('Recall/validation', val_recall, current_iteration)
+                    self.writer.add_scalar('F1/validation', val_f1, current_iteration)
 
                 self.writer.add_scalar('Loss/validation', val_avg_loss, current_iteration)
-                self.writer.add_scalar('Precision/validation', val_precision, current_iteration)
-                self.writer.add_scalar('Recall/validation', val_recall, current_iteration)
-                self.writer.add_scalar('F1/validation', val_f1, current_iteration)
 
                 # Remember best validation loss.
                 if val_avg_loss < self.best_vloss:
@@ -193,8 +199,9 @@ class ClassificationModelTrainer():
 
                 # Log loss and metrics.
                 print(f"\n Fold {self.fold + 1}; Epoch {self.epoch + 1} - Training loss: {train_avg_loss:.3f}; Validation loss: {val_avg_loss:.3f}; lr: {current_lr:.2e}")
-                print(f"\t Training: precision: {train_precision:.3f}\t recall: {train_recall:.3f}\t F1: {train_f1:.3f}")
-                print(f"\t Validation: precision: {val_precision:.3f}\t recall: {val_recall:.3f}\t F1: {val_f1:.3f}")
+                if self.target_mode in CLASSIFICATION_TARGETS:
+                    print(f"\t Training: precision: {train_precision:.3f}\t recall: {train_recall:.3f}\t F1: {train_f1:.3f}")
+                    print(f"\t Validation: precision: {val_precision:.3f}\t recall: {val_recall:.3f}\t F1: {val_f1:.3f}")
                 print(f"Train time: {epoch_train_time:.3f}; validation time: {epoch_val_time:.3f}, total epoch time: {(epoch_train_time + epoch_val_time):.3f}\n")
 
                 torch.cuda.empty_cache()
@@ -272,7 +279,7 @@ class ClassificationModelTrainer():
 
             self.optimizer.zero_grad()
 
-            with torch.amp.autocast('cuda'):
+            with torch.amp.autocast("cuda"):
                 outputs = self.model(inputs)
                 loss = self.loss_function(outputs, labels)
 
@@ -289,17 +296,11 @@ class ClassificationModelTrainer():
 
             running_loss += loss.item()
 
-            if self.is_multilabel:
-                labels_true = labels.int()
-                labels_pred = (outputs > 0.5).int()
-            else:
-                labels_true = torch.argmax(labels, dim=1)
-                labels_pred = torch.nn.Softmax(dim=1)(outputs)
-                labels_pred = torch.argmax(outputs, dim=1)
-
-            self.precision_metric.update(labels_pred, labels_true)
-            self.recall_metric.update(labels_pred, labels_true)
-            self.f1_metric.update(labels_pred, labels_true)
+            if self.target_mode in CLASSIFICATION_TARGETS:
+                update_classification_metrics(
+                    self.precision_metric, self.recall_metric, self.f1_metric,
+                    outputs, labels, self.is_multilabel
+                )
 
             # Report 20 times per epoch
             if i % report_interval == report_interval - 1:
@@ -330,37 +331,47 @@ class ClassificationModelTrainer():
 
                 running_loss += loss
 
-                if self.is_multilabel:
-                    labels_true = labels.int()
-                    labels_pred = (outputs > 0.5).int()
-                else:
-                    labels_true = torch.argmax(labels, dim=1)
-                    labels_pred = torch.nn.Softmax(dim=1)(outputs)
-                    labels_pred = torch.argmax(outputs, dim=1)
-
-                self.precision_metric.update(labels_pred, labels_true)
-                self.recall_metric.update(labels_pred, labels_true)
-                self.f1_metric.update(labels_pred, labels_true)
+                if self.target_mode in CLASSIFICATION_TARGETS:
+                    update_classification_metrics(
+                        self.precision_metric, self.recall_metric, self.f1_metric,
+                        outputs, labels, self.is_multilabel
+                    )
 
         val_avg_loss = running_loss / val_batches
         return val_avg_loss
 
 
+def update_classification_metrics(precision, recall, f1_score, model_output, labels, is_multilabel):
+    if is_multilabel:
+        labels_true = labels.int()
+        labels_pred = (model_output > 0.5).int()
+    else:
+        labels_true = torch.argmax(labels, dim=1)
+        labels_pred = torch.nn.Softmax(dim=1)(model_output)
+        labels_pred = torch.argmax(model_output, dim=1)
+
+    precision.update(labels_pred, labels_true)
+    recall.update(labels_pred, labels_true)
+    f1_score.update(labels_pred, labels_true)
+
+
 def evaluate_model(model, num_classes, target_mode, test_loader):
-    if target_mode == "onehot":
+    if target_mode == ONE_HOT_TARGET:
         precision_metric = MulticlassPrecision(num_classes=num_classes, average='macro').to(model.device)
         recall_metric = MulticlassRecall(num_classes=num_classes, average='macro').to(model.device)
         f1_metric = MulticlassF1Score(num_classes=num_classes, average='macro').to(model.device)
 
         loss_function = torch.nn.CrossEntropyLoss()
         is_multilabel = False
-    elif target_mode == "multilabel":
+    elif target_mode == MULTILABEL_TARGET:
         precision_metric = MultilabelPrecision(num_labels=num_classes, average='micro').to(model.device)
         recall_metric = MultilabelRecall(num_labels=num_classes, average='micro').to(model.device)
         f1_metric = MultilabelF1Score(num_labels=num_classes, average='micro').to(model.device)
 
         loss_function = torch.nn.BCEWithLogitsLoss()
         is_multilabel = True
+    elif target_mode == AUTOENCODER_TARGET:
+        loss_function = torch.nn.MSELoss()
     else:
         raise ValueError(f"Unknown target mode provided: {target_mode}")
     
@@ -376,32 +387,29 @@ def evaluate_model(model, num_classes, target_mode, test_loader):
             inputs = inputs.to(model.device, non_blocking=True)
             labels = labels.to(model.device, non_blocking=True)
 
-            with torch.cuda.amp.autocast():
-                outputs = model(inputs)
-                loss = loss_function(outputs, labels)
+            outputs = model(inputs)
+            loss = loss_function(outputs, labels)
 
             running_loss += loss
 
-            if is_multilabel:
-                labels_true = labels.int()
-                labels_pred = (outputs > 0.5).int()
-            else:
-                labels_true = torch.argmax(labels, dim=1)
-                labels_pred = torch.nn.Softmax(dim=1)(outputs)
-                labels_pred = torch.argmax(outputs, dim=1)
-
-            precision_metric.update(labels_pred, labels_true)
-            recall_metric.update(labels_pred, labels_true)
-            f1_metric.update(labels_pred, labels_true)
+            if target_mode in CLASSIFICATION_TARGETS:
+                update_classification_metrics(
+                    precision_metric, recall_metric, f1_metric,
+                    outputs, labels, is_multilabel
+                )
 
     test_avg_loss = running_loss / len(test_loader)
     test_time = time() - start_time
 
-    # Compute and write remembered validation metrics.
-    precision = precision_metric.compute().item()
-    recall = recall_metric.compute().item()
-    f1 = f1_metric.compute().item()
+    # Log loss and time.
+    print(f"Test time: {test_time:.3f}\t loss: {test_avg_loss:.3f}")
+
+    if target_mode in CLASSIFICATION_TARGETS:
+        # Compute and write remembered test metrics.
+        precision = precision_metric.compute().item()
+        recall = recall_metric.compute().item()
+        f1 = f1_metric.compute().item()
     
-    # Log loss and metrics.
-    print(f"Test loss {test_avg_loss:.3f}\t precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}")
-    print(f"Test time: {test_time:.3f}")
+        # Log metrics.
+        print(f"Test precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}")
+
