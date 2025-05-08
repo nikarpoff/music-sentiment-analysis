@@ -27,7 +27,7 @@ from sklearn.preprocessing import MinMaxScaler
 from config import *
 from model.data import KFoldSpecsDataLoader
 from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer, SpectrogramMaskedAutoEncoder
-from model.utils import ModelTrainer, evaluate_model
+from model.utils import ClassificationModelTrainer, AutoencoderModelTrainer, evaluate_classification_model, evaluate_autoencoder
 
 
 def cli_arguments_preprocess() -> str:
@@ -156,30 +156,42 @@ if __name__ == "__main__":
         raise ValueError(f"Unknown model type: {model_type}")
 
     # Build required model.
-    if model_type == "specstr":
+    if model_type == SPECSTR:
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
 
         model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
-    elif model_type == "specs_autoencoder":
+    elif model_type == SPECS_AUTOENCODER:
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
 
         model = SpectrogramMaskedAutoEncoder(dropout=dropout, device=device).to(device)
-    elif model_type == "pure_specstr":
+    elif model_type == PURE_SPECSTR:
         model = SpectrogramPureTransformer(output_dim=output_dim, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
     if task_type == "train" or task_type == "ctrain":
-        trainer = ModelTrainer(
-            model, model_name=model_type, num_classes=output_dim, save_path=save_path,
-            target_mode=target_mode, kfold_loader=kfold_dataloader, lr=learning_rate,
-            epochs=epochs, l2_reg=l2_reg
-        )
+        if model_type in CLASSIFICATION_MODELS:
+            trainer = ClassificationModelTrainer(
+                model, model_name=model_type, num_classes=output_dim, save_path=save_path,
+                target_mode=target_mode, kfold_loader=kfold_dataloader, lr=learning_rate,
+                epochs=epochs, l2_reg=l2_reg
+            )
+        elif model_type in AUTOENCODER_MODELS:
+            trainer = AutoencoderModelTrainer(
+                model, model_name=model_type, save_path=save_path,
+                kfold_loader=kfold_dataloader, lr=learning_rate,
+                epochs=epochs, l2_reg=l2_reg
+            )
 
-    if task_type == "train":
-        # In train we starts with new model.
-        print(f"Built model:\n", model)
-        trainer.init_new_train()
+        if task_type == "train":
+            # In train we starts with new model.
+            print(f"Built model:\n", model)
+            trainer.init_new_train()
+        else:
+            # In continues train we starts with loaded model.
+            print(f"Loaded model:\n", model)
+            trainer.init_continue_train(saved_model_name=model_name)
+        
         trainer.train_model()
     elif task_type == "test":
         # In test we use trained model.
@@ -188,9 +200,6 @@ if __name__ == "__main__":
 
         test_loader = kfold_dataloader.get_test_loader()
 
-        evaluate_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
-    elif task_type == "ctrain":
-        trainer.init_continue_train(saved_model_name=model_name)
-        trainer.train_model()
+        evaluate_classification_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
     else:
         raise ValueError(f"Unknown task type: {task_type}")

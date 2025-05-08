@@ -252,6 +252,8 @@ class SpectrogramMaskedAutoEncoder(nn.Module):
         # Model params
         INPUT_CHANNELS = 96
         CNN_OUT_CHANNELS = 32
+        KERNEL_SIZE = 3
+        PADDING = 1
         RNN_UNITS = 16
         TRANSFORMER_DEPTH = 32
         NHEAD = 8
@@ -260,25 +262,28 @@ class SpectrogramMaskedAutoEncoder(nn.Module):
         BIDIRECTIONAL_RNN = True
 
         # --- Encoder ---
-        self.encoder = SpectrogramMaskedEncoder(INPUT_CHANNELS, CNN_OUT_CHANNELS, RNN_UNITS, TRANSFORMER_DEPTH, NHEAD, NUM_ENCODER_LAYERS,
-                                                bidirectional_rnn=BIDIRECTIONAL_RNN, mask_ratio=mask_ratio, dropout=dropout, device=device)
+        self.encoder = SpectrogramMaskedEncoder(INPUT_CHANNELS, CNN_OUT_CHANNELS, KERNEL_SIZE, PADDING, RNN_UNITS, TRANSFORMER_DEPTH, NHEAD,
+                                                NUM_ENCODER_LAYERS, bidirectional_rnn=BIDIRECTIONAL_RNN, mask_ratio=mask_ratio,
+                                                dropout=dropout, device=device)
 
         # --- Decoder ---
-        self.decoder = SpectrogramMaskedDecoder(INPUT_CHANNELS, CNN_OUT_CHANNELS, RNN_UNITS, TRANSFORMER_DEPTH,
+        self.decoder = SpectrogramMaskedDecoder(INPUT_CHANNELS, CNN_OUT_CHANNELS, KERNEL_SIZE, PADDING, RNN_UNITS, TRANSFORMER_DEPTH,
                                                 NHEAD, NUM_DECODER_LAYERS, BIDIRECTIONAL_RNN, dropout=dropout, device=device)
 
     def forward(self, spec):
         """
         spec: Tensor (batch, features, sequence)
-        returns: recon_spec (batch, features, sequence), mask (batch, inner_seq)
+        returns: recon_spec (batch, features, sequence)
         """
-        print(spec.shape)
-        encoded_vis_spec, masked_full_spec, mask = self.encoder(spec)
-        return self.decoder(masked_full_spec, encoded_vis_spec)
+        initial_len = spec.size(-1)
+        encoded_vis_spec, masked_full_spec, mask = self.encoder(spec)       # remember mask also
+        decoded_spec = self.decoder(masked_full_spec, encoded_vis_spec)     # decoded spec length may differ
+
+        return nn.functional.interpolate(decoded_spec, size=initial_len, mode='linear')
     
 
 class SpectrogramMaskedEncoder(nn.Module):
-    def __init__(self, input_channels, cnn_out_channels, rnn_units, transformer_depth, nhead,
+    def __init__(self, input_channels, cnn_out_channels, kernel_size, padding, rnn_units, transformer_depth, nhead,
                  num_encoder_layers, mask_ratio=0.8, bidirectional_rnn=True, dropout=0.2, device='cuda'):
         super().__init__()
         self.device = device
@@ -286,15 +291,15 @@ class SpectrogramMaskedEncoder(nn.Module):
 
         # Encoder with 1D convolution
         self.cnn_encoder = nn.Sequential(
-            nn.Conv1d(in_channels=input_channels, out_channels=32, kernel_size=3, padding=1),
+            nn.Conv1d(input_channels, 32, kernel_size, padding=padding),
             nn.BatchNorm1d(32),
             nn.GELU(),
-            nn.MaxPool1d(kernel_size=3, padding=1),
+            nn.MaxPool1d(kernel_size, padding=padding),
 
-            nn.Conv1d(in_channels=32, out_channels=cnn_out_channels, kernel_size=3, padding=1),
+            nn.Conv1d(32, cnn_out_channels, kernel_size, padding=padding),
             nn.BatchNorm1d(cnn_out_channels),
             nn.GELU(),
-            nn.MaxPool1d(kernel_size=3, padding=1),
+            nn.MaxPool1d(kernel_size, padding=padding),
         )
         # Output of CNN is (batch, CNN_OUT_CHANNELS, new_sequence_length)
 
@@ -378,7 +383,7 @@ class SpectrogramMaskedEncoder(nn.Module):
 
 
 class SpectrogramMaskedDecoder(nn.Module):
-    def __init__(self, input_channels, cnn_out_channels, rnn_units, transformer_depth,
+    def __init__(self, input_channels, cnn_out_channels, kernel_size, padding, rnn_units, transformer_depth,
                  nhead, num_decoder_layers, bidirectional_rnn=True, dropout=0.2, device='cuda'):
         super().__init__()
         self.device = device
@@ -406,11 +411,19 @@ class SpectrogramMaskedDecoder(nn.Module):
 
         # Output of CNN decoder is (batch, IN_CHANNELS, IN_SEQ_LEN)
         self.cnn_decoder = nn.Sequential(
-            nn.ConvTranspose1d(in_channels=cnn_out_channels, out_channels=32, kernel_size=3, stride=3, padding=1),
+            nn.ConvTranspose1d(in_channels=cnn_out_channels,
+                               out_channels=32,
+                               kernel_size=kernel_size,
+                               stride=kernel_size,
+                               padding=padding),
             nn.BatchNorm1d(32),
             nn.GELU(),
 
-            nn.ConvTranspose1d(in_channels=32, out_channels=input_channels, kernel_size=3, stride=3, padding=1),
+            nn.ConvTranspose1d(in_channels=32,
+                               out_channels=input_channels,
+                               kernel_size=kernel_size,
+                               stride=kernel_size,
+                               padding=padding),
             nn.BatchNorm1d(input_channels),
             nn.GELU(),
         )
@@ -420,23 +433,15 @@ class SpectrogramMaskedDecoder(nn.Module):
         # Memory(enc_out) - encoder output (batch, vis_len, d_model).
         x = self.transformer_decoder(dec_in, enc_out)  # (batch, seq, d_model)
 
-        print(x.shape)
-    
         # RNN decoding
         x, _ = self.rnn_decoder(x)  # (batch, seq, rnn_units)
-
-        print(x.shape)
 
         # Projection from rnn_units to cnn_units.
         x = self.cnn_units_proj(x)  # (batch, seq, cnn_units)
         x = x.permute(0, 2, 1)  # (batch, cnn_units, seq)
 
-        print(x.shape)
-
         # Final decoding. Increasing of the seq len.
         x = self.cnn_decoder(x)
-
-        print(x.shape)
         
         return x
 
