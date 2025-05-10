@@ -291,15 +291,30 @@ class SpectrogramMaskedEncoder(nn.Module):
 
         # Encoder with 1D convolution
         self.cnn_encoder = nn.Sequential(
-            nn.Conv1d(input_channels, 32, kernel_size, padding=padding),
-            nn.BatchNorm1d(32),
+            nn.Conv1d(input_channels, 128, kernel_size, padding=padding, bias=False),
+            nn.BatchNorm1d(128),
             nn.GELU(),
-            nn.MaxPool1d(kernel_size, padding=padding),
+            nn.MaxPool1d(kernel_size),
 
-            nn.Conv1d(32, cnn_out_channels, kernel_size, padding=padding),
+            nn.Conv1d(128, 256, kernel_size, padding=padding, bias=False),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size),
+
+            nn.Conv1d(256, 512, kernel_size, padding=padding, bias=False),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size),
+
+            nn.Conv1d(512, 512, kernel_size, padding=padding, bias=False),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size),
+
+            nn.Conv1d(512, cnn_out_channels, kernel_size, padding=padding, bias=False),
             nn.BatchNorm1d(cnn_out_channels),
             nn.GELU(),
-            nn.MaxPool1d(kernel_size, padding=padding),
+            nn.MaxPool1d(kernel_size),
         )
         # Output of CNN is (batch, CNN_OUT_CHANNELS, new_sequence_length)
 
@@ -412,18 +427,47 @@ class SpectrogramMaskedDecoder(nn.Module):
         # Output of CNN decoder is (batch, IN_CHANNELS, IN_SEQ_LEN)
         self.cnn_decoder = nn.Sequential(
             nn.ConvTranspose1d(in_channels=cnn_out_channels,
-                               out_channels=32,
+                               out_channels=512,
                                kernel_size=kernel_size,
                                stride=kernel_size,
-                               padding=padding),
-            nn.BatchNorm1d(32),
+                               padding=padding,
+                               bias=False),
+            nn.BatchNorm1d(512),
             nn.GELU(),
 
-            nn.ConvTranspose1d(in_channels=32,
+            nn.ConvTranspose1d(in_channels=512,
+                               out_channels=512,
+                               kernel_size=kernel_size,
+                               stride=kernel_size,
+                               padding=padding,
+                               bias=False),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+
+            nn.ConvTranspose1d(in_channels=512,
+                               out_channels=256,
+                               kernel_size=kernel_size,
+                               stride=kernel_size,
+                               padding=padding,
+                               bias=False),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            
+            nn.ConvTranspose1d(in_channels=256,
+                               out_channels=128,
+                               kernel_size=kernel_size,
+                               stride=kernel_size,
+                               padding=padding,
+                               bias=False),
+            nn.BatchNorm1d(128),
+            nn.GELU(),
+
+            nn.ConvTranspose1d(in_channels=128,
                                out_channels=input_channels,
                                kernel_size=kernel_size,
                                stride=kernel_size,
-                               padding=padding),
+                               padding=padding,
+                               bias=False),
             nn.BatchNorm1d(input_channels),
             nn.GELU(),
         )
