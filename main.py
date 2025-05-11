@@ -26,8 +26,8 @@ from sklearn.preprocessing import MinMaxScaler
 
 from config import *
 from model.data import KFoldSpecsDataLoader
-from model.specstr import SpectrogramTransformer, SpectrogramPureTransformer, SpectrogramMaskedAutoEncoder
-from model.utils import ClassificationModelTrainer, AutoencoderModelTrainer, evaluate_classification_model, evaluate_autoencoder
+from model.specstr import *
+from model.utils import *
 
 
 def cli_arguments_preprocess() -> str:
@@ -45,14 +45,14 @@ def cli_arguments_preprocess() -> str:
     
     parser.add_argument("--model", required=True,
                         choices=[PURE_SPECSTR, SPECSTR, SPECS_AUTOENCODER,
-                                 PRELEARNED_SPECSTR],
+                                 PRETRAINED_SPECSTR],
                         help="Type of machine learning model to be used")
     
     parser.add_argument("--task", required=True,
                         choices=["train", "ctrain", "test"],
                         help="Type of task to be performed")
     
-    parser.add_argument("mname", nargs="?", help="Model name for load and test/continue train (Required for task == test or ctrain)")
+    parser.add_argument("mname", nargs="?", help="Model name to load and test/continue train or to use as pretrained part")
     
     parser.add_argument("--moods", required=False,
                       choices=["2", "4", "8", "all"],
@@ -68,6 +68,8 @@ def cli_arguments_preprocess() -> str:
 
     if args.mname is None and (args.task == "test" or args.task == "ctrain"):
         parser.error("For load model you must provide the name of saved model (with file extention)")
+    elif args.mname is None and args.model in PRETRAINED_MODELS:
+        parser.error("For use pretrained model you must provide the name of saved model (with file extention)")
 
     return os.path.abspath(args.path), args.model, args.mname, args.task, int(args.moods)
 
@@ -161,11 +163,28 @@ if __name__ == "__main__":
 
         model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
     elif model_type == SPECS_AUTOENCODER:
-        dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
+        dropout = float(os.getenv("SPECS_AUTOENCODER_DROPOUT", 0.2))
 
         model = SpectrogramMaskedAutoEncoder(dropout=dropout, device=device).to(device)
     elif model_type == PURE_SPECSTR:
         model = SpectrogramPureTransformer(output_dim=output_dim, device=device).to(device)
+    elif model_type == PRETRAINED_SPECSTR:
+        dropout = float(os.getenv("SPECS_AUTOENCODER_DROPOUT", 0.2))
+
+        mae = SpectrogramMaskedAutoEncoder(dropout=dropout, device=device).to(device)
+
+        # We can load autoencoder and train pre-trained model or load checkpoint of pre-trained model.
+        if task_type == "train":
+            # Load pretrained autoencoder.
+            load_path = os.path.join(os.getenv("SPECS_AUTOENCODER_SAVE_PATH"), model_name)
+            mae.load_state_dict(torch.load(load_path, weights_only=True))
+            encoder = mae.encoder
+        else:
+            # Load checkpoint of pre-trained model (no standalone encoder)
+            encoder = None
+        
+        model = SpectrogramPreTrainedTransformer(encoder, output_dim, device=device).to(device)
+
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

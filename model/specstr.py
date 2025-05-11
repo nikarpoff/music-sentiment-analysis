@@ -251,13 +251,13 @@ class SpectrogramMaskedAutoEncoder(nn.Module):
 
         # Model params
         INPUT_CHANNELS = 96
-        CNN_OUT_CHANNELS = 32
+        CNN_OUT_CHANNELS = 512
         KERNEL_SIZE = 3
         PADDING = 1
-        RNN_UNITS = 16
-        TRANSFORMER_DEPTH = 32
-        NHEAD = 8
-        NUM_ENCODER_LAYERS = 4
+        RNN_UNITS = 256
+        TRANSFORMER_DEPTH = 256
+        NHEAD = 16
+        NUM_ENCODER_LAYERS = 6
         NUM_DECODER_LAYERS = 4
         BIDIRECTIONAL_RNN = True
 
@@ -287,6 +287,7 @@ class SpectrogramMaskedEncoder(nn.Module):
                  num_encoder_layers, mask_ratio=0.8, bidirectional_rnn=True, dropout=0.2, device='cuda'):
         super().__init__()
         self.device = device
+        self.transformer_depth = transformer_depth
         self.mask_ratio = mask_ratio
 
         # Encoder with 1D convolution
@@ -344,7 +345,7 @@ class SpectrogramMaskedEncoder(nn.Module):
         # Trainable mask token (to avoid masking with padding value)
         self.mask_token = nn.Parameter(torch.zeros(transformer_depth))
 
-    def forward(self, x):
+    def forward(self, x, gen_mask=True):
         # CNN specs encoding. Seq len decreasing
         x = self.cnn_encoder(x)  # (batch, cnn_units, seq)
         x = x.permute(0, 2, 1)  # (batch, seq, cnn_units)
@@ -355,29 +356,35 @@ class SpectrogramMaskedEncoder(nn.Module):
         # Project to transformer dimensions
         x = self.d_model_proj(x)  # (batch, seq, d_model)
         
-        # Generate random mask.
-        seq_len = x.size(1)
+        # Generate random mask if required.
+        if gen_mask:
+            seq_len = x.size(1)
 
-        # AGenerate mask (single mask for all of batches)
-        num_vis = int(round(seq_len * (1 - self.mask_ratio)))
+            # Generate mask (single mask for all of batches)
+            num_vis = int(round(seq_len * (1 - self.mask_ratio)))
         
-        perm = torch.randperm(seq_len, device=self.device)
-        vis_idx  = perm[:num_vis].argsort(dim=0)
+            perm = torch.randperm(seq_len, device=self.device)
+            vis_idx  = perm[:num_vis].argsort(dim=0)
 
-        mask = torch.zeros(seq_len, dtype=torch.bool, device=self.device)
-        mask[vis_idx] = True
+            mask = torch.zeros(seq_len, dtype=torch.bool, device=self.device)
+            mask[vis_idx] = True
 
-        # Apply mask for BxS along whole depth. Get unmasked and masked X.
-        x_vis = x[:, vis_idx, :]
+            # Apply mask for BxS along whole depth. Get unmasked and masked X.
+            x_vis = x[:, vis_idx, :]  # encode only unmasked parts.
 
-        x_masked = torch.empty_like(x)
-        i_x_vis = 0
-        for i in range(len(mask)):
-            if mask[i]:
-                x_masked[:, i, :] = x_vis[:, i_x_vis, :]
-                i_x_vis += 1
-            else:
-                x_masked[:, i, :] = self.mask_token
+            x_masked = torch.empty_like(x)
+            i_x_vis = 0
+            for i in range(len(mask)):
+                if mask[i]:
+                    x_masked[:, i, :] = x_vis[:, i_x_vis, :]
+                    i_x_vis += 1
+                else:
+                    x_masked[:, i, :] = self.mask_token
+        else:
+            # This case intended for encoder-only architecture (pre-learned, not autoencoder)
+            x_vis = x  # if mask not required, encode whole spectrogram.
+            x_masked = None
+            mask = None
 
         # Add positional encoding
         x_enc = self.pos_encoder(x_vis)
@@ -496,3 +503,51 @@ class SpectrogramMaskedDecoder(nn.Module):
         model_describe += "Projection to CNN depth" + str(self.cnn_units_proj) + "\n" * 2
         model_describe += "CNN Decoder: " + str(self.cnn_decoder) + "\n" * 2
         return model_describe
+
+
+class SpectrogramPreTrainedTransformer(nn.Module):
+    def __init__(self, encoder: SpectrogramMaskedEncoder | None, output_dim: int, device='cuda'):
+        """
+        Pre-trained transformer model: encoder -> classifier.
+        :param encoder: part of the trained autoencoder. If None then load state dict required.
+        :param output_dim: classes to classify number
+        """
+        super().__init__()
+        self.device = device
+
+        self.encoder = encoder
+        depth = encoder.transformer_depth
+
+        self.attention_pool = nn.Sequential(
+            nn.Linear(depth, depth//2),
+            nn.Tanh(),
+            nn.Linear(depth//2, 1),
+            nn.Softmax(dim=1)
+        )
+
+        self.output_proj = nn.Sequential(
+            nn.Linear(depth, depth),
+            nn.GELU(),
+            nn.Linear(depth, depth),
+            nn.GELU(),
+            nn.Linear(depth, output_dim),
+        )
+
+    def forward(self, x):
+        x, _, _ = self.encoder(x, gen_mask=False)
+
+        # Attention pooling
+        attn_weights = self.attention_pool(x)  # (batch, seq, 1)
+        x = torch.sum(x * attn_weights, dim=1)  # (batch, depth)
+        
+        # Final projection (classification)
+        logits = self.output_proj(x)
+        return logits
+
+    def __str__(self):
+        model_describe = ""
+        model_describe += "Encoder: " + str(self.encoder) + "\n"
+        model_describe += "Attention pooling: " + str(self.attention_pool) + "\n" * 2
+        model_describe += "Output projection: " + str(self.output_proj) + "\n" * 2
+        return model_describe
+
