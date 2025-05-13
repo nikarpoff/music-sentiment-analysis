@@ -332,9 +332,9 @@ class ClassificationModelTrainer(ModelTrainer):
         # Log metrics.
         precision, recall, f1 = self._compute_and_reset_metrics()
 
-        self.writer.add_scalar('Precision/train', precision, current_iteration)
-        self.writer.add_scalar('Recall/train', recall, current_iteration)
-        self.writer.add_scalar('F1/train', f1, current_iteration)
+        self.writer.add_scalar('Precision/validation', precision, current_iteration)
+        self.writer.add_scalar('Recall/validation', recall, current_iteration)
+        self.writer.add_scalar('F1/validation', f1, current_iteration)
 
         print(f"\t Validation: precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}\n")
         return val_avg_loss
