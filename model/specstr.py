@@ -551,3 +551,119 @@ class SpectrogramPreTrainedTransformer(nn.Module):
         model_describe += "Output projection: " + str(self.output_proj) + "\n" * 2
         return model_describe
 
+
+class MultiHeadPool(nn.Module):
+    def __init__(self, d_model: int, nhead: int, dropout: float = 0.3):
+        """
+        Multi-head Attention Pool.
+        """
+        super().__init__()
+        
+        self.query = nn.Parameter(torch.randn(1, d_model))  # learnable query
+        self.mha = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=nhead,
+            batch_first=True,
+            dropout=dropout
+        )
+        
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size = x.size(0)
+        
+        q = self.query.unsqueeze(0).expand(batch_size, -1, -1)  # (batch, 1, depth)
+        
+        # out: (batch, 1, depth), attn_weights: (batch, 1, seq_len)
+        attn_out, attn_weights = self.mha(q, x, x, need_weights=True)  # K, V = x, x
+        out = attn_out.squeeze(1)  # (B, D)
+
+        # Residual connection & normalization
+        out = self.norm(out + q.squeeze(1))
+        return out
+
+class ExperimentalSpectrogramTransformer(nn.Module):
+    def __init__(self, output_dim: int, dropout=0.2, device='cuda'):
+        super().__init__()
+        self.device = device
+
+        # Model params
+        TRANSFORMER_DEPTH = 512
+        NHEAD = 16
+        NUM_ENCODERS = 8
+
+        TRANSFORMER_DROPOUT = 0.4
+        TRANSFORMER_CONTEXT_LEN = 64
+
+        # Mel-spectrograms have size 96x(sequence_size). So in_channels=96
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels=96, out_channels=128, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(128),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=4, stride=2),
+
+            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=2),
+
+            nn.Conv1d(in_channels=256, out_channels=512, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=2),
+
+            nn.Conv1d(in_channels=512, out_channels=1024, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(1024),
+            nn.GELU(),
+            nn.MaxPool1d(kernel_size=2),
+
+            nn.Conv1d(in_channels=1024, out_channels=TRANSFORMER_DEPTH, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm1d(TRANSFORMER_DEPTH),
+            nn.GELU(),
+            nn.AdaptiveMaxPool1d(output_size=TRANSFORMER_CONTEXT_LEN),
+        )
+        # Output of CNN is (batch, d_model, new_sequence_length)
+
+        # Use sinusoidal positional encoding
+        self.pos_encoder = PositionalEncoding(TRANSFORMER_DEPTH)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=TRANSFORMER_DEPTH,
+            dim_feedforward=TRANSFORMER_DEPTH * 4,
+            nhead=NHEAD,
+            dropout=TRANSFORMER_DROPOUT,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True     # LayerNorm first
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_ENCODERS, enable_nested_tensor=False)
+
+        self.attention_pool = MultiHeadPool(TRANSFORMER_DEPTH, NHEAD, dropout=dropout)
+        self.output_proj = nn.Linear(TRANSFORMER_DEPTH, output_dim)
+
+    def forward(self, x):
+        # CNN Feature extraction
+        x = self.cnn(x)  # (batch, cnn_units, seq)
+        x = x.permute(0, 2, 1)  # (batch, seq, cnn_units)
+        
+        # Add positional encoding
+        x = self.pos_encoder(x)
+        
+        # Transformer processing
+        x = self.transformer_encoder(x)  # (batch, seq, d_model)
+        
+        # Multi-head Attention pooling
+        x = self.attention_pool(x)  # (batch, d_model)
+        
+        # Final projection
+        logits = self.output_proj(x)
+        return logits
+
+    def __str__(self):
+        model_describe = ""
+        model_describe += "CNN: " + str(self.cnn) + "\n" * 2
+        model_describe += str(self.pos_encoder) + "\n" * 2
+        model_describe += "Transformer Encoder: " + str(self.transformer_encoder) + "\n"
+        model_describe += "Attention pooling: " + str(self.attention_pool) + "\n" * 2
+        model_describe += "Output projection: " + str(self.output_proj) + "\n" * 2
+        return model_describe
+

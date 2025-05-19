@@ -152,7 +152,7 @@ if __name__ == "__main__":
         # Load the dataset.
         kfold_dataloader = KFoldSpecsDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=min_amp,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
-                                                use_augmentation=True, num_workers=4, test_size=0.2,
+                                                use_augmentation=True, num_workers=6, test_size=0.2,
                                                 transform_specs=transform_specs, random_state=None)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     if model_type == SPECSTR:
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
 
-        model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
+        model = ExperimentalSpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
     elif model_type == SPECS_AUTOENCODER:
         dropout = float(os.getenv("SPECS_AUTOENCODER_DROPOUT", 0.2))
 
