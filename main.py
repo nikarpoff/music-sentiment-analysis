@@ -169,24 +169,27 @@ if __name__ == "__main__":
     elif model_type == PURE_SPECSTR:
         model = SpectrogramPureTransformer(output_dim=output_dim, device=device).to(device)
     elif model_type == PRETRAINED_SPECSTR:
-        dropout = float(os.getenv("SPECS_AUTOENCODER_DROPOUT", 0.2))
-
+        dropout = float(os.getenv("PRETRAINED_SPECSTR_DROPOUT", 0.2))
         mae = SpectrogramMaskedAutoEncoder(dropout=dropout, device=device).to(device)
 
         # We can load autoencoder and train pre-trained model or load checkpoint of pre-trained model.
         if task_type == "train":
-            # Load pretrained autoencoder.
+            # Load pretrained autoencoder (start train with pretrained autoencoder).
             load_path = os.path.join(os.getenv("SPECS_AUTOENCODER_SAVE_PATH"), model_name)
             mae.load_state_dict(torch.load(load_path, weights_only=True))
-            encoder = mae.encoder
-        else:
-            # Load checkpoint of pre-trained model (no standalone encoder)
-            encoder = None
-        
-        model = SpectrogramPreTrainedTransformer(encoder, output_dim, device=device).to(device)
+        # In other case, we start with pretrained model checkpoint, loading encoder params not required.
 
+        encoder = mae.encoder
+        model = SpectrogramPreTrainedTransformer(encoder, output_dim, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
+
+    print(f"Built model:\n", model)
+    total_params, trainable_params = get_params_count(model)
+    formated_total_params = format(total_params, ",").replace(",", " ")
+    formated_trainable_params = format(trainable_params, ",").replace(",", " ")
+    print(f"Total params: {formated_total_params}")
+    print(f"Trainable params: {formated_trainable_params}\n")
 
     if task_type == "train" or task_type == "ctrain":
         if model_type in CLASSIFICATION_MODELS:
@@ -204,19 +207,15 @@ if __name__ == "__main__":
 
         if task_type == "train":
             # In train we starts with new model.
-            print(f"Built model:\n", model)
             trainer.init_new_train()
         else:
             # In continues train we starts with loaded model.
-            print(f"Loaded model:\n", model)
             trainer.init_continue_train(saved_model_name=model_name)
         
         trainer.train_model()
     elif task_type == "test":
         # In test we use trained model.
         model.load_state_dict(torch.load(os.path.join(save_path, model_name), weights_only=True))
-        print(f"Loaded model:\n", model)
-
         test_loader = kfold_dataloader.get_test_loader()
 
         evaluate_classification_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)

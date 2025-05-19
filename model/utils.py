@@ -514,3 +514,12 @@ def evaluate_autoencoder(model, test_loader):
     # Log loss and time.
     print(f"Test time: {test_time:.3f}\t loss: {test_avg_loss:.3f}")
 
+
+def get_params_count(model: torch.nn.Module) -> tuple:
+    """
+    Get number of parameters in the model.
+    :return: tuple (total_params, trainable_params)
+    """
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total_params, trainable_params
