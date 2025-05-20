@@ -222,6 +222,9 @@ class ModelTrainer():
             anneal_strategy='cos'   # cos strategy for decrease lr
         )
 
+        # Set early stoping epochs without improving counter to zero.
+        self.early_stopper.counter = 0
+
     def _train_one_epoch(self, loader, current_iteration):
         pass
 
