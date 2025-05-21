@@ -4,6 +4,7 @@ runs/
 
 # Citical data
 api_keys.json
+web/backend/.env
 
 # VS Code
 .vscode/
