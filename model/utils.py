@@ -27,6 +27,28 @@ from torchmetrics.classification import (
 
 from config import *
 
+
+class EarlyStopping:
+    def __init__(self, patience: int = 5, min_delta: float = 0.0):
+        """
+        :param patience: epoch count, after which training will be stopped if no improvement
+        :param min_delta: minimal loss delta to consider improvement
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = float('inf')
+        self.counter = 0
+        self.should_stop = False
+
+    def step(self, current_loss: float):
+        if current_loss + self.min_delta < self.best_loss:
+            self.best_loss = current_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.should_stop = True
+
 class ModelTrainer():
     def __init__(self, model, model_name: str, save_path: str, kfold_loader: KFoldSpecsDataLoader, lr: float, epochs: int, l2_reg: float):
         """
@@ -42,6 +64,7 @@ class ModelTrainer():
         self.model_name = model_name
         self.save_path = save_path
         self.kfold_loader = kfold_loader
+        self.early_stopper = EarlyStopping(patience=5, min_delta=1e-4)
         self.epochs = epochs
 
         self.fold = 0
@@ -79,7 +102,6 @@ class ModelTrainer():
 
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             self.sheduler_one_cycle.load_state_dict(ckpt["one_cycle_state_dict"])
-            self.sheduler_plateau.load_state_dict(ckpt["plateau_state_dict"])
             self.epoch = ckpt["epoch"] + 1
             self.fold = ckpt["fold"]
 
@@ -103,7 +125,7 @@ class ModelTrainer():
 
         self.date = self.start_timestamp.strftime(DATE_FORMAT)
         self.timestamp = self.start_timestamp.strftime(TIMESTAMP_FORMAT)
-        self.writer = SummaryWriter(f'runs/train_{self.model_name}_{self.num_classes}_{self.timestamp}')
+        self.writer = SummaryWriter(f'runs/train_{self.model_name}_{self.timestamp}')
         print(f"Loaded model:\n", self.model)
 
     def train_model(self):
@@ -148,7 +170,6 @@ class ModelTrainer():
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'one_cycle_state_dict': self.sheduler_one_cycle.state_dict(),
-                    'plateau_state_dict': self.sheduler_plateau.state_dict(),
                 }, os.path.join(self.save_path, f"{self.model_name}_checkpoint_{self.timestamp}_fold_{self.fold + 1}_epoch_{self.epoch + 1}.pth"))
 
                 # Log loss and metrics.
@@ -156,6 +177,13 @@ class ModelTrainer():
                 print(f"Train time: {epoch_train_time:.3f}; validation time: {epoch_val_time:.3f}, total epoch time: {(epoch_train_time + epoch_val_time):.3f}\n")
 
                 torch.cuda.empty_cache()
+
+                # Early stopping.
+                self.early_stopper.step(val_avg_loss)
+                if self.early_stopper.should_stop:
+                    print(f"Early stopping: no improvement for {self.early_stopper.patience} epochs.")
+                    break
+                
                 self.epoch += 1
 
             self.fold += 1
@@ -182,26 +210,21 @@ class ModelTrainer():
         # AdamW optimizer. Use weigth decay and adaptive learning rate.
         self.optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.l2_reg)
 
-        # Sheduler 1: OneCycleLR (per batch)
+        # Sheduler: OneCycleLR (per batch)
         fold_steps = self.epochs * epoch_steps
         self.sheduler_one_cycle = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             max_lr=self.lr * 5,
             total_steps=fold_steps,
             pct_start=0.3,          # 30% for warm-up
-            div_factor=1e2,         # div factor for start lr
+            div_factor=10,          # div factor for start lr
             final_div_factor=1e4,   # div factor for final lr
             anneal_strategy='cos'   # cos strategy for decrease lr
         )
 
-        # Scheduler 2: ReduceLROnPlateau (per epoch)
-        self.sheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer,
-            mode='min',     # minimize loss
-            factor=0.5,     # div factor for lr
-            patience=2,     # epochs number without improvement (after decrease lr)
-            min_lr=1e-7     # min available lr
-        )
+        # Set early stoping epochs without improving counter to zero.
+        self.early_stopper.counter = 0
+        self.early_stopper.should_stop = False
 
     def _train_one_epoch(self, loader, current_iteration):
         pass
