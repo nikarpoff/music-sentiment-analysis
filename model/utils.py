@@ -125,7 +125,7 @@ class ModelTrainer():
 
         self.date = self.start_timestamp.strftime(DATE_FORMAT)
         self.timestamp = self.start_timestamp.strftime(TIMESTAMP_FORMAT)
-        self.writer = SummaryWriter(f'runs/train_{self.model_name}_{self.num_classes}_{self.timestamp}')
+        self.writer = SummaryWriter(f'runs/train_{self.model_name}_{self.timestamp}')
         print(f"Loaded model:\n", self.model)
 
     def train_model(self):
@@ -224,6 +224,7 @@ class ModelTrainer():
 
         # Set early stoping epochs without improving counter to zero.
         self.early_stopper.counter = 0
+        self.early_stopper.should_stop = False
 
     def _train_one_epoch(self, loader, current_iteration):
         pass

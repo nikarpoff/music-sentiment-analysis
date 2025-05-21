@@ -152,7 +152,7 @@ if __name__ == "__main__":
         # Load the dataset.
         kfold_dataloader = KFoldSpecsDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=min_amp,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
-                                                use_augmentation=True, num_workers=6, test_size=0.2,
+                                                use_augmentation=True, num_workers=4, test_size=0.2,
                                                 transform_specs=transform_specs, random_state=7)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -219,6 +219,9 @@ if __name__ == "__main__":
         model.load_state_dict(torch.load(os.path.join(save_path, model_name), weights_only=True))
         test_loader = kfold_dataloader.get_test_loader()
 
-        evaluate_classification_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
+        if model_type in CLASSIFICATION_MODELS:
+            evaluate_classification_model(model, num_classes=output_dim, target_mode=target_mode, test_loader=test_loader)
+        elif model_type in AUTOENCODER_MODELS:
+            evaluate_autoencoder(model, test_loader)
     else:
         raise ValueError(f"Unknown task type: {task_type}")

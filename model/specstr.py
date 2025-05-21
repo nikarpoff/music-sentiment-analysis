@@ -254,11 +254,11 @@ class SpectrogramMaskedAutoEncoder(nn.Module):
         KERNEL_SIZE = 2
         PADDING = 1
         
-        TRANSFORMER_DEPTH = 512
+        TRANSFORMER_DEPTH = 256
         NHEAD = 8
         NUM_ENCODER_LAYERS = 6
         NUM_DECODER_LAYERS = 4
-        TRANSFORMER_CONTEXT_LEN = 256
+        TRANSFORMER_CONTEXT_LEN = 128
 
         DROPOUT_CNN = 0.1
         DROPOUT_TRANSFORMER = 0.4
@@ -300,13 +300,13 @@ class SpectrogramMaskedEncoder(nn.Module):
             nn.MaxPool1d(kernel_size=kernel_size),
             nn.Dropout1d(dropout_cnn),
 
-            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=kernel_size, padding=padding, bias=False),
-            nn.BatchNorm1d(256),
-            nn.GELU(),
-            nn.MaxPool1d(kernel_size=kernel_size),
-            nn.Dropout1d(dropout_cnn),
+            # nn.Conv1d(in_channels=128, out_channels=256, kernel_size=kernel_size, padding=padding, bias=False),
+            # nn.BatchNorm1d(256),
+            # nn.GELU(),
+            # nn.MaxPool1d(kernel_size=kernel_size),
+            # nn.Dropout1d(dropout_cnn),
 
-            nn.Conv1d(in_channels=256, out_channels=transformer_depth, kernel_size=kernel_size, padding=padding, bias=False),
+            nn.Conv1d(in_channels=128, out_channels=transformer_depth, kernel_size=kernel_size, padding=padding, bias=False),
             nn.BatchNorm1d(transformer_depth),
             nn.GELU(),
             nn.AdaptiveMaxPool1d(output_size=transformer_context_len),
@@ -400,16 +400,6 @@ class SpectrogramMaskedDecoder(nn.Module):
         # Output of CNN decoder is (batch, IN_CHANNELS, IN_SEQ_LEN)
         self.cnn_decoder = nn.Sequential(
             nn.ConvTranspose1d(in_channels=transformer_depth,
-                               out_channels=256,
-                               kernel_size=kernel_size,
-                               stride=kernel_size,
-                               padding=padding,
-                               bias=False),
-            nn.BatchNorm1d(256),
-            nn.GELU(),
-            nn.Dropout1d(dropout_cnn),
-
-            nn.ConvTranspose1d(in_channels=256,
                                out_channels=128,
                                kernel_size=kernel_size,
                                stride=kernel_size,
@@ -418,6 +408,16 @@ class SpectrogramMaskedDecoder(nn.Module):
             nn.BatchNorm1d(128),
             nn.GELU(),
             nn.Dropout1d(dropout_cnn),
+
+            # nn.ConvTranspose1d(in_channels=256,
+            #                    out_channels=128,
+            #                    kernel_size=kernel_size,
+            #                    stride=kernel_size,
+            #                    padding=padding,
+            #                    bias=False),
+            # nn.BatchNorm1d(128),
+            # nn.GELU(),
+            # nn.Dropout1d(dropout_cnn),
 
             nn.ConvTranspose1d(in_channels=128,
                                out_channels=input_channels,
