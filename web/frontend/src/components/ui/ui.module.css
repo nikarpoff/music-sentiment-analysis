@@ -3,10 +3,11 @@
     background-color: #2e69c7;
     color: white;
     font-weight: 600;
-    padding: 0.5rem 1.25rem;
+    padding: 0.7rem 1.25rem;
+    margin: 0.7rem;
     font-size: 2rem;
     border: none;
-    border-radius: 0.5rem;
+    border-radius: 1.0rem;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     cursor: pointer;
     transition: 
@@ -47,13 +48,14 @@
 /* SELECTOR */
 .darkSelector {
     appearance: none;
-    background-color: #3b82f6;
+    background-color: #2e69c7;
     color: white;
     font-weight: 600;
-    padding: 0.5rem 1.25rem;
+    padding: 0.7rem 1.25rem;
+    margin: 0.7rem;
     font-size: 2rem;
     border: none;
-    border-radius: 0.5rem;
+    border-radius: 1.0rem;
     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     cursor: pointer;
     transition:
@@ -82,8 +84,8 @@
 }
   
 .darkSelector:disabled {
-    background-color: #93c5fd;
-    color: #e5e7eb;
+    background-color: #546f8f; /* blue-300 */
+    color: #bcbec2; /* gray-200 */
     cursor: not-allowed;
     opacity: 0.6;
     box-shadow: none;

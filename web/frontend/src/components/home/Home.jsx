@@ -1,5 +1,6 @@
 import { DarkButton } from '../ui/DarkButton'
 import { FileUpload, LinkUpload } from '../ui/Inputs';
+import { DarkSelector } from '../ui/DarkSelector'
 import { CardCarousel } from '../cards/CardsCarousel';
 import classes from "./home.module.css";
 
@@ -13,6 +14,7 @@ export default function Home() {
     }
 
     const [loaded, setLoaded] = useState('');
+    const [model, setModel] = useState('test');
     const [localFile, setLocalFile] = useState(null);
     const [youtubeLink, setYoutubeLink] = useState('');
     const [rutubeLink, setRutubeLink] = useState('');
@@ -33,6 +35,10 @@ export default function Home() {
                 break;
         }
     };
+
+    const onModelChange = (select) => {
+        setModel(select.target.value)
+    }
 
     const onLocalFileUpload = (file) => {
         setLoaded(true);
@@ -59,6 +65,39 @@ export default function Home() {
             setLoaded(false);
         }
     };
+
+    const sendPredictionRequest = async (file, model) => {
+        const formData = new FormData();
+        formData.append("audio", file);
+        formData.append("model_version", model);
+
+        try {
+            const response = await fetch("http://localhost:8000/predict/", {
+                method: "POST",
+                body: formData,
+            });
+
+            if (!response.ok) {
+                throw new Error(`Ошибка: ${response.status}`);
+            }
+
+            const result = await response.json();
+            console.log(result)
+            return result;
+        } catch (error) {
+            console.error("Ошибка при отправке запроса:", error);
+            return null;
+        }
+    };
+
+    const handlePredictClick = () => {
+        if (localFile) {
+            sendPredictionRequest(localFile, model);
+        } else {
+            console.warn("Файл не выбран!");
+        }
+    };
+
 
     return (
         <div className={classes.home}>
@@ -103,9 +142,18 @@ export default function Home() {
                 onChange={e => setSel(e.target.value)}
             /> */}
 
-            <div style={{margin: "3vh"}} >
-                <DarkButton disabled={!loaded}>
-                    Test... Тест!
+            <div style={{display: 'flex', flexDirection: 'row'}} >
+                <DarkSelector
+                    options={[
+                        { value: 'test', label: 'specstr 19B'},
+                    ]}
+                    value={model}
+                    onChange={onModelChange}
+                    disabled={!loaded}
+                />
+
+                <DarkButton onClick={handlePredictClick} disabled={!loaded}>
+                    Сделать предсказание!
                 </DarkButton>
 
             </div>
