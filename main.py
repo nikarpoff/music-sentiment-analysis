@@ -161,8 +161,7 @@ if __name__ == "__main__":
     if model_type == SPECSTR:
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
 
-        model = ExperimentalSpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
-        # model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
+        model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
     elif model_type == SPECS_AUTOENCODER:
         dropout = float(os.getenv("SPECS_AUTOENCODER_DROPOUT", 0.2))
 
