@@ -5,6 +5,7 @@ runs/
 # Citical data
 api_keys.json
 web/backend/.env
+nginx/
 
 # VS Code
 .vscode/

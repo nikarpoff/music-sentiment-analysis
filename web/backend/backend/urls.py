@@ -19,7 +19,5 @@ from django.urls import path
 import server_app.views as views
 
 urlpatterns = [
-    path("", views.HomeTemplateView.as_view(), name='home'),
-    path("predict/", views.MoodPrediction.as_view(), name = 'mood_prediction'),
-    path('manifest.json', views.ManifestView.as_view(), name='manifest'), 
+    path("api/predict/", views.MoodPrediction.as_view(), name = 'mood_prediction'),
 ]

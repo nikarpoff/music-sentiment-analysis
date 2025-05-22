@@ -72,7 +72,7 @@ export default function Home() {
         formData.append("model_version", model);
 
         try {
-            const response = await fetch("http://localhost:8000/predict/", {
+            const response = await fetch("http://10.0.0.2/api/predict/", {
                 method: "POST",
                 body: formData,
             });

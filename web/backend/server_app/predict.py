@@ -1,19 +1,5 @@
-import os
-import librosa
-import numpy as np
-import io
-import soundfile as sf
+import requests
 from rest_framework import status
-from backend.settings import BASE_DIR
-
-MODELS_PATH = os.path.join(BASE_DIR, 'data')
-
-# Use params like in MTG-Jamendo dataset.
-FFT_WINDOW_LEN = 512
-HOP_LEN = 256
-WINDOW = 'hann'
-N_MELS = 96
-
 
 class Prediction:
     def predict(self, request):
@@ -27,31 +13,21 @@ class Prediction:
 
             audio_file = request.FILES['audio']
 
-            # Read as binary buffer.
-            audio_bytes = audio_file.read()
-            audio_buffer = io.BytesIO(audio_bytes)
+            # Send audio file to the model for prediction.
+            response = requests.post(
+                'http://localhost:5000/api/model/predict',
+                files={'file': (audio_file.name, audio_file, audio_file.content_type)}
+            )
 
-            # Upload file by soundfile. Use the same sample rate as in dataset.
-            target_sr = 12000
-            y, sr = librosa.load(audio_buffer, sr=target_sr)
+            if response.status_code != 200:
+                raise ValueError("Model prediction failed: " + str(data))
+            
+            data = response.json()
 
-            # Get spectrogram.
-            mel_spec = librosa.feature.melspectrogram(y=y,
-                                                      sr=sr,
-                                                      n_fft=FFT_WINDOW_LEN,
-                                                      hop_length=HOP_LEN,
-                                                      n_mels=N_MELS,
-                                                      window=WINDOW,
-                                                      )
-            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-
-            # mock prediction
-            prediction = "sad"
-            logits = [0.6, 0.4]
-
-            result_dict['prediction'] = prediction
-            result_dict['logits'] = logits
-            result_dict['mel_shape'] = mel_spec_db.shape  # debug mode!
+            # Form result dictionary and send response.
+            result_dict['prediction'] = data['predict']
+            result_dict['logits'] = data['logits']
+            result_dict['classes'] = data['classes']
 
             return_dict['response'] = result_dict
             return_dict['status'] = status.HTTP_200_OK
