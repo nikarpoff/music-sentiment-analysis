@@ -136,7 +136,7 @@ class KFoldDataLoader(Iterator):
     Interface of DataLoader objects for train/val folds and testing supsets. Iterable by folds.
     """
     def __init__(self, dataset_path: str, dataset_name: str, splits: int, target_mode: str, test_size=0.2,
-                 batch_size=32, num_workers=8, outputs_path='./outputs', random_state=None):
+                 batch_size=32, num_workers=8, outputs_path='./outputs', moods="all", random_state=None):
         """
         :param dataset_path: Path to the dataset directory.
         :param dataset_name: Name of the dataset file (depends on moods mode).
@@ -159,6 +159,7 @@ class KFoldDataLoader(Iterator):
         self.test_size = test_size
         self.splits = splits
         self.classes = None
+        self.moods = moods
 
         if num_workers == 0:
             self.prefetch_factor = None
@@ -201,7 +202,7 @@ class KFoldDataLoader(Iterator):
             version = datetime.now().strftime(DATE_FORMAT)
 
         self.classes = classes
-        classes_filename = f"classes_{self.target_mode}_{len(classes)}_{version}.json"
+        classes_filename = f"classes_{self.target_mode}_{self.moods}_{version}.json"
         with open(os_path.join(self.outputs_path, classes_filename), "w", encoding="utf-8") as file:
             json.dump(classes, file, indent=4)
 
@@ -265,14 +266,14 @@ class KFoldSpecsDataLoader(KFoldDataLoader):
     """
     def __init__(self, dataset_path: str, dataset_name: str, splits: int, target_mode: str, min_seq_len: None, max_seq_len: None,
                 pad_value=-90., test_size=0.2, batch_size=32, transform_specs: TransformerMixin = None, use_augmentation = True,
-                num_workers=8, outputs_path='./outputs', random_state=None):
+                num_workers=8, outputs_path='./outputs', moods="all", random_state=None):
         """
         :param max_seq_len: Constant max sequence length. Spectrograms with another length will be truncated to this length. Optional
         :param min_seq_len: Constant min sequence length. Spectrograms with another length will be padded to this length. Optional
         :param pad_value: Pad value for cases where padding of spectrogram required.
         :param transform_specs: sklearn transformer for preprocessing spectrograms. Optional.
         """
-        super().__init__(dataset_path, dataset_name, splits, target_mode, test_size, batch_size, num_workers, outputs_path, random_state)
+        super().__init__(dataset_path, dataset_name, splits, target_mode, test_size, batch_size, num_workers, outputs_path, moods, random_state)
 
         self.transform_specs = transform_specs
         self.min_seq_len = min_seq_len
@@ -322,14 +323,14 @@ class KFoldRawAudioDataLoader(KFoldDataLoader):
     """
     def __init__(self, dataset_path: str, dataset_name: str, splits: int, target_mode: str, min_seq_len: None, max_seq_len: None,
                 pad_value=0., test_size=0.2, batch_size=32, transform_audio: TransformerMixin = None, use_augmentation = True,
-                sample_rate=22050, num_workers=8, outputs_path='./outputs', random_state=None):
+                sample_rate=22050, num_workers=8, outputs_path='./outputs', moods="all", random_state=None):
         """
         :param max_seq_len: Constant max sequence length. Spectrograms with another length will be truncated to this length. Optional
         :param min_seq_len: Constant min sequence length. Spectrograms with another length will be padded to this length. Optional
         :param pad_value: Pad value for cases where padding of spectrogram required.
         :param transform_specs: sklearn transformer for preprocessing spectrograms. Optional.
         """
-        super().__init__(dataset_path, dataset_name, splits, target_mode, test_size, batch_size, num_workers, outputs_path, random_state)
+        super().__init__(dataset_path, dataset_name, splits, target_mode, test_size, batch_size, num_workers, outputs_path, moods, random_state)
         self.transform_audio = transform_audio
         self.min_seq_len = min_seq_len
         self.max_seq_len = max_seq_len

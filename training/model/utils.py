@@ -73,6 +73,7 @@ class ModelTrainer():
 
         self.fold = 0
         self.epoch = 0
+        self.iteration = 0
         self.best_vloss = float('inf')
         self.folds = len(kfold_loader)
         self.report_times = 20
@@ -106,6 +107,7 @@ class ModelTrainer():
 
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             self.sheduler_one_cycle.load_state_dict(ckpt["one_cycle_state_dict"])
+            self.iteration = ckpt["iteration"] + 1
             self.epoch = ckpt["epoch"] + 1
             self.fold = ckpt["fold"]
 
@@ -146,31 +148,31 @@ class ModelTrainer():
             # And for every epoch.
             while self.epoch < self.epochs:
                 print(f"Fold {self.fold + 1}/{self.folds}; Epoch {self.epoch + 1}/{self.epochs}")
-                current_iteration = (self.fold * self.epochs) + self.epoch + 1
 
                 # Train for one epoch.
                 start_time = time()
-                train_avg_loss = self._train_one_epoch(train_loader, current_iteration)
+                train_avg_loss = self._train_one_epoch(train_loader)
                 epoch_train_time = time() - start_time
 
                 # Validate model.
                 start_time = time()
-                val_avg_loss = self._validate_one_epoch(val_loader, current_iteration)
+                val_avg_loss = self._validate_one_epoch(val_loader)
                 epoch_val_time = time() - start_time
 
-                self.writer.add_scalar('Loss/validation', val_avg_loss, current_iteration)
+                self.writer.add_scalar('Loss/validation', val_avg_loss)
 
                 # Remember best validation loss.
                 if val_avg_loss < self.best_vloss:
                     self.best_vloss = val_avg_loss
 
                 current_lr = self.optimizer.param_groups[0]['lr']
-                self.writer.add_scalar('Learning rate', current_lr, current_iteration)
+                self.writer.add_scalar('Learning rate', current_lr, self.iteration)
 
                 # Save checkpoint.
                 torch.save({
                     'fold': self.fold,
                     'epoch': self.epoch,
+                    'iteration': self.iteration,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'one_cycle_state_dict': self.sheduler_one_cycle.state_dict(),
@@ -181,6 +183,7 @@ class ModelTrainer():
                 print(f"Train time: {epoch_train_time:.3f}; validation time: {epoch_val_time:.3f}, total epoch time: {(epoch_train_time + epoch_val_time):.3f}\n")
 
                 torch.cuda.empty_cache()
+                self.iteration += 1
 
                 # Early stopping.
                 self.early_stopper.step(val_avg_loss)
@@ -230,10 +233,10 @@ class ModelTrainer():
         self.early_stopper.counter = 0
         self.early_stopper.should_stop = False
 
-    def _train_one_epoch(self, loader, current_iteration):
+    def _train_one_epoch(self, loader):
         pass
 
-    def _validate_one_epoch(self, loader, current_iteration):
+    def _validate_one_epoch(self, loader):
         pass
 
 
@@ -281,7 +284,7 @@ class ClassificationModelTrainer(ModelTrainer):
 
         return precision, recall, f1
 
-    def _train_one_epoch(self, loader, current_iteration):
+    def _train_one_epoch(self, loader):
         total_batches = len(loader)
         report_interval = max(1, total_batches // self.report_times)
         self.model.train(True)
@@ -322,7 +325,7 @@ class ClassificationModelTrainer(ModelTrainer):
                 avg_loss = running_loss / report_interval
 
                 print(f'\t batch [{i + 1}/{total_batches}] - loss: {avg_loss:.5f}\t time per batch: {time_per_batch:.2f}')
-                current_step = ((self.fold * self.epochs) + self.epoch) * total_batches + i
+                current_step = self.iteration * total_batches + i
                 self.writer.add_scalar('Loss/train', avg_loss, current_step)
                 running_loss = 0.
                 start_time = time()
@@ -330,14 +333,14 @@ class ClassificationModelTrainer(ModelTrainer):
         # Log metrics.
         precision, recall, f1 = self._compute_and_reset_metrics()
 
-        self.writer.add_scalar('Precision/train', precision, current_iteration)
-        self.writer.add_scalar('Recall/train', recall, current_iteration)
-        self.writer.add_scalar('F1/train', f1, current_iteration)
+        self.writer.add_scalar('Precision/train', precision, self.iteration)
+        self.writer.add_scalar('Recall/train', recall, self.iteration)
+        self.writer.add_scalar('F1/train', f1, self.iteration)
 
         print(f"\t Training: precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}\n")
         return avg_loss
 
-    def _validate_one_epoch(self, loader, current_iteration):
+    def _validate_one_epoch(self, loader):
         self.model.eval()  # Set the model to evaluation mode
         val_batches = len(loader)
         running_loss = 0.
@@ -359,9 +362,9 @@ class ClassificationModelTrainer(ModelTrainer):
         # Log metrics.
         precision, recall, f1 = self._compute_and_reset_metrics()
 
-        self.writer.add_scalar('Precision/validation', precision, current_iteration)
-        self.writer.add_scalar('Recall/validation', recall, current_iteration)
-        self.writer.add_scalar('F1/validation', f1, current_iteration)
+        self.writer.add_scalar('Precision/validation', precision, self.iteration)
+        self.writer.add_scalar('Recall/validation', recall, self.iteration)
+        self.writer.add_scalar('F1/validation', f1, self.iteration)
 
         print(f"\t Validation: precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}\n")
         return val_avg_loss
@@ -390,7 +393,7 @@ class AutoencoderModelTrainer(ModelTrainer):
         super().__init__(model, model_name, save_path, kfold_loader, lr, epochs, l2_reg)
         self.loss_function = torch.nn.MSELoss()
 
-    def _train_one_epoch(self, loader, current_iteration):
+    def _train_one_epoch(self, loader):
         total_batches = len(loader)
         report_interval = max(1, total_batches // self.report_times)
         self.model.train(True)
@@ -428,14 +431,14 @@ class AutoencoderModelTrainer(ModelTrainer):
                 avg_loss = running_loss / report_interval
 
                 print(f'\t batch [{i + 1}/{total_batches}] - loss: {avg_loss:.5f}\t time per batch: {time_per_batch:.2f}')
-                current_step = ((self.fold * self.epochs) + self.epoch) * total_batches + i
+                current_step = self.iteration * total_batches + i
                 self.writer.add_scalar('Loss/train', avg_loss, current_step)
                 running_loss = 0.
                 start_time = time()
 
         return avg_loss
 
-    def _validate_one_epoch(self, loader, current_iteration):
+    def _validate_one_epoch(self, loader):
         self.model.eval()  # Set the model to evaluation mode
         val_batches = len(loader)
         running_loss = 0.

@@ -56,23 +56,23 @@ def cli_arguments_preprocess() -> str:
     parser.add_argument("mname", nargs="?", help="Model name to load and test/continue train or to use as pretrained part")
     
     parser.add_argument("--moods", required=False,
-                      choices=["2", "4", "8", "all"],
-                      help="Number of aggregated moods. By default: all source moods")
+                      choices=["2", "hs", "re", "4", "8", "all"],
+                      help="Number of aggregated moods or moods themselves. By default: all source moods")
     
     args = parser.parse_args()
 
     if args.path[-1] != "/":
         args.path += "/"
 
-    if not args.moods or args.moods == "all":
-        args.moods = 0
+    if not args.moods:
+        args.moods = "all"
 
     if args.mname is None and (args.task == "test" or args.task == "ctrain"):
         parser.error("For load model you must provide the name of saved model (with file extention)")
     elif args.mname is None and args.model in PRETRAINED_MODELS:
         parser.error("For use pretrained model you must provide the name of saved model (with file extention)")
 
-    return os.path.abspath(args.path), args.model, args.mname, args.task, int(args.moods)
+    return os.path.abspath(args.path), args.model, args.mname, args.task, args.moods
 
 def get_specs_scaler(melspecs_stats_path) -> MinMaxScaler:
     """
@@ -105,7 +105,7 @@ def get_specs_scaler(melspecs_stats_path) -> MinMaxScaler:
 
 if __name__ == "__main__":
     # Read command line arguments.
-    dataset_path, model_type, model_name, task_type, moods_number = cli_arguments_preprocess()
+    dataset_path, model_type, model_name, task_type, moods = cli_arguments_preprocess()
 
     # Load environment variables.
     load_dotenv()
@@ -135,14 +135,20 @@ if __name__ == "__main__":
     kfold_splits = int(os.getenv("KFOLD_SPLITS", 5))
 
     # Set the dataset name based on the moods number.
-    dataset_name = "dataset_all_moods.tsv" if moods_number == 0 else f"dataset_{moods_number}_moods.tsv"
-    output_dim = total_moods if moods_number == 0 else moods_number
+    dataset_name = "dataset_all_moods.tsv" if moods == "all" else f"dataset_{moods}_moods.tsv"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    moods_number = total_moods
+
+    if moods == "re" or moods == "hs":  # named moods distribution.
+        moods_number = 2
+    else:
+        moods_number = int(moods_number)
+    output_dim = moods_number
 
     # Select the target transformation based on the target mode.
     if model_type in AUTOENCODER_MODELS:
         target_mode = AUTOENCODER_TARGET
-    elif model_type in CLASSIFICATION_MODELS and moods_number == 0:
+    elif model_type in CLASSIFICATION_MODELS and moods == "all":
         target_mode = MULTILABEL_TARGET
     else:
         target_mode = ONE_HOT_TARGET
@@ -159,7 +165,7 @@ if __name__ == "__main__":
         kfold_dataloader = KFoldSpecsDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=min_amp,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
                                                 use_augmentation=True, num_workers=4, test_size=0.2, outputs_path=outputs_path,
-                                                transform_specs=transform_specs, random_state=random_state)
+                                                transform_specs=transform_specs, moods=moods, random_state=random_state)
     elif model_type in RAW_AUDIO_MODELS:
         max_seq_len = int(os.getenv(f"{model_type.upper()}_MAX_SEQ_LEN", 50000))
         min_seq_len = int(os.getenv(f"{model_type.upper()}_MIN_SEQ_LEN", 20000))
@@ -169,7 +175,7 @@ if __name__ == "__main__":
         kfold_dataloader = KFoldRawAudioDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=-1.,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
                                                 use_augmentation=True, num_workers=0, test_size=0.2, outputs_path=outputs_path,
-                                                transform_audio=None, sample_rate=sample_rate, random_state=random_state)
+                                                transform_audio=None, sample_rate=sample_rate, moods=moods, random_state=random_state)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

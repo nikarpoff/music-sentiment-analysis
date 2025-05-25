@@ -40,8 +40,8 @@ def cli_arguments_preprocess() -> tuple:
                       help="Path to mel spectrograms. Should be related to the dataset path. By default: 'melspecs/'")
     
     parser.add_argument("--moods", required=False,
-                      choices=["2", "4", "8", "all"],
-                      help="Number of aggregated moods. By default: all source moods")
+                      choices=["2", "hs", "re", "4", "8", "all"],
+                      help="Number of aggregated moods or names of agregated moods. By default: all source moods")
 
     args = parser.parse_args()
 
@@ -51,8 +51,8 @@ def cli_arguments_preprocess() -> tuple:
     if args.mels is None:
         args.mels = "melspecs/"
 
-    if not args.moods or args.moods == "all":
-        args.moods = 0
+    if not args.moods:
+        args.moods = "all"
 
     return os.path.abspath(args.path), args.mels, args.moods
 
@@ -281,7 +281,7 @@ def main():
         print(f"Tags distribution saved successfully. Path: {tags_distribution_save_path}\n")
 
         # If user defined moods mode as "all" then script should just save the cleaned data.
-        if moods_merge_mode == 0:
+        if moods_merge_mode == "all":
             save_path = os.path.join(dataset_path, "dataset_all_moods.tsv")
             cleaned_dataset.to_csv(save_path, sep="\t", index=False)
             print("Cleaned dataset saved successfully. Path: ", save_path)
