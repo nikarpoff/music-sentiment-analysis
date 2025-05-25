@@ -25,9 +25,11 @@ from argparse import ArgumentParser
 from sklearn.preprocessing import MinMaxScaler
 
 from config import *
-from model.data import KFoldSpecsDataLoader
+
+from model.data import KFoldSpecsDataLoader, KFoldRawAudioDataLoader
 from model.specstr import *
 from model.utils import *
+from model.rawtr import *
 
 
 def cli_arguments_preprocess() -> str:
@@ -44,8 +46,7 @@ def cli_arguments_preprocess() -> str:
                         help="Path to source dataset")
     
     parser.add_argument("--model", required=True,
-                        choices=[PURE_SPECSTR, SPECSTR, SPECS_AUTOENCODER,
-                                 PRETRAINED_SPECSTR],
+                        choices=AVAILABLE_MODELS,
                         help="Type of machine learning model to be used")
     
     parser.add_argument("--task", required=True,
@@ -111,6 +112,11 @@ if __name__ == "__main__":
     outputs_path = str(os.getenv("OUTPUTS_PATH", "./outputs/"))
     models_path = str(os.getenv("MODELS_PATH", "./outputs/models/"))
     save_path = str(os.getenv(f"{model_type.upper()}_SAVE_PATH", "./outputs/models/"))
+    random_state = str(os.getenv("RANDOM_STATE", "None"))
+    if random_state == "None":
+        random_state = None
+    else:
+        random_state = int(random_state)
     
     if not os.path.isdir(outputs_path):
         os.mkdir(outputs_path)
@@ -153,7 +159,17 @@ if __name__ == "__main__":
         kfold_dataloader = KFoldSpecsDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=min_amp,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
                                                 use_augmentation=True, num_workers=4, test_size=0.2, outputs_path=outputs_path,
-                                                transform_specs=transform_specs, random_state=7)
+                                                transform_specs=transform_specs, random_state=random_state)
+    elif model_type in RAW_AUDIO_MODELS:
+        max_seq_len = int(os.getenv(f"{model_type.upper()}_MAX_SEQ_LEN", 50000))
+        min_seq_len = int(os.getenv(f"{model_type.upper()}_MIN_SEQ_LEN", 20000))
+        sample_rate = int(os.getenv(f"{model_type.upper()}_SAMPLE_RATE", 22050))
+
+        # Load the dataset. Normalization/scaling of audio not required.
+        kfold_dataloader = KFoldRawAudioDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=-1.,
+                                                batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
+                                                use_augmentation=True, num_workers=0, test_size=0.2, outputs_path=outputs_path,
+                                                transform_audio=None, sample_rate=sample_rate, random_state=random_state)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -181,6 +197,9 @@ if __name__ == "__main__":
 
         encoder = mae.encoder
         model = SpectrogramPreTrainedTransformer(encoder, output_dim, device=device).to(device)
+    elif model_type == RAWTR:
+        dropout = float(os.getenv("RAWTR_DROPOUT", 0.2))
+        model = RawAudioTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)        
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -207,7 +226,7 @@ if __name__ == "__main__":
 
         if task_type == "train":
             # In train we starts with new model.
-            trainer.init_new_train()
+                trainer.init_new_train()
         else:
             # In continues train we starts with loaded model.
             trainer.init_continue_train(saved_model_name=model_name)
