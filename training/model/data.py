@@ -19,6 +19,7 @@ import json
 import numpy as np
 import pandas as pd
 from collections.abc import Iterator
+from abc import ABCMeta, abstractmethod
 
 from random import randint
 from ast import literal_eval
@@ -118,16 +119,14 @@ class PadAugmentCollate:
         if self.for_train and (self.augmentation is not None):
             xs_padded = self.augmentation.transform(xs_padded)
 
-
-
         ys = torch.stack(ys)
 
-        for i in range(xs_padded.shape[0]):
-            torchaudio.save(
-                uri=f"F:/dataset/music/augmented{i}_{ys[i].argmax()}.wav",
-                src=xs_padded[i],
-                sample_rate=16000,
-            )
+        # for i in range(xs_padded.shape[0]):
+        #     torchaudio.save(
+        #         uri=f"F:/dataset/music/augmented{i}_{ys[i].argmax()}.wav",
+        #         src=xs_padded[i],
+        #         sample_rate=16000,
+        #     )
         return xs_padded, ys
 
 
@@ -150,7 +149,6 @@ class KFoldDataLoader(Iterator):
         self.dataset_path = dataset_path
         self.dataset_name = dataset_name
         self.full_dataset_path = os_path.join(dataset_path, dataset_name)
-
         self.random_state = random_state
         self.outputs_path = outputs_path
         self.num_workers = num_workers
@@ -211,9 +209,6 @@ class KFoldDataLoader(Iterator):
         return x_train, x_test, y_train, y_test
 
     def __next__(self):
-        return super().__next__()
-
-    def __next__(self):
         while self.current_fold < self.start_fold:
             next(self.kf_iter)  # skip
             self.current_fold += 1
@@ -243,13 +238,14 @@ class KFoldDataLoader(Iterator):
         Required for loading from checkpoints.
         """
         self.start_fold = start
-    
+
+    @abstractmethod
     def _get_loader(self, x, y, for_train=True):
-        # Interface, should be overwrited
-        pass
+        """Get loader of batched data"""
 
     def get_test_loader(self):
-        self._get_loader(self.x_test, self.y_test, for_train=False), self.classes
+        return self._get_loader(self.x_test, self.y_test, for_train=False), self.classes
+
     
     def __len__(self):
         return self.splits

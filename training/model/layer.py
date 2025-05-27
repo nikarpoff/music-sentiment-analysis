@@ -16,6 +16,7 @@
 import math
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 class MultiHeadPool(nn.Module):
     def __init__(self, d_model: int, nhead: int, dropout: float = 0.3):
@@ -71,69 +72,198 @@ class PositionalEncoding(nn.Module):
         return "Positional sinusoidal encoding"
 
 
-class ResidualConv1D(nn.Module):
+class ResidualConv1d(nn.Module):
     """
-    ResNet-like architecture with two Conv1D and residual connection.
-    Kernel size, padding and stride are chosen in such a way that there is no reduction in the seq_len.
+    One convolution with residual connection.
     """
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dropout=0.0):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
         super().__init__()
-        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding, bias=False)
-        self.bn1   = nn.BatchNorm1d(out_channels)
-        self.act1  = nn.GELU()
-        
-        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=1, padding=padding, bias=False)
-        self.bn2   = nn.BatchNorm1d(out_channels)
+        self.convolution = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding, bias=False),
+            nn.BatchNorm1d(out_channels),
+            nn.GELU()
+        )
         
         # If in_channels != out_channels then apply 1x1 convolution (for identity=x).
-        self.identity_projection = None
+        self.channels_projection = None
         if in_channels != out_channels:
-            self.identity_projection = nn.Sequential(
+            self.channels_projection = nn.Sequential(
                 nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False),
                 nn.BatchNorm1d(out_channels)
             )
-        
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        self.act2 = nn.GELU()
     
-    def forward(self, x):
-        identity = x
-        
-        # First convolution
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.act1(out)
-        
-        # Second convolution
-        out = self.conv2(out)
-        out = self.bn2(out)
-        
-        # Projection (if required)
-        if self.identity_projection is not None:
-            identity = self.identity_projection(identity)
-        
-        # Residual connection and out activation
-        out = out + identity
-        out = self.act2(out)
-        out = self.dropout(out)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.convolution(x)
 
-        return out
+        # Projection in channels dimension (if required)
+        if self.channels_projection is not None:
+            x = self.channels_projection(x)
 
+        # Adaptive average pooling in len dimenstion (if required)
+        new_len = out.size(2)
+        if new_len != x.size(2):
+            x = F.adaptive_avg_pool1d(x, new_len)
+        
+        # Residual connection
+        return out + x
 
-class MultiScaleConv1d(nn.Module):
-    def __init__(self, in_ch, out_ch):
+    def __str__(self):
+        return f"Residual convolution: {super().__str__()}"
+
+class MultiLayerConv1d(nn.Module):
+    def __init__(
+            self,
+            in_channels: int,
+            cnn_units: list,
+            cnn_kernel_sizes: list,
+            cnn_strides: list,
+            cnn_paddings: list,
+            use_residual_connections=False,
+            dropout=0.1,
+            device='cuda'
+    ) -> None:
+        """
+        Multi-layer 1D convolution.
+        """
         super().__init__()
+        assert len(cnn_units) == len(cnn_kernel_sizes) == len(cnn_strides)
+        assert len(cnn_units) != 0
+        self.device = device
 
-        self.branches = nn.ModuleList([
-            nn.Conv1d(in_ch, out_ch, kernel_size=k, stride=1, padding=k//2)
-            for k in (3, 7, 15, 31)
-        ])
+        conv_layers = []
+        current_in = in_channels
 
-        self.bn = nn.BatchNorm1d(out_ch * 4)
-        self.act = nn.GELU()
+        for out_channels, kernel_size, stride, padding in zip(cnn_units, cnn_kernel_sizes, cnn_strides, cnn_paddings):
+            if use_residual_connections:
+                conv_layers.extend([
+                    ResidualConv1d(
+                        in_channels=current_in,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding
+                    ),
+                    nn.Dropout(dropout)
+                ])
+            else:
+                conv_layers.extend([
+                    nn.Conv1d(
+                        in_channels=current_in,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                        bias=False
+                    ),
+                    nn.BatchNorm1d(out_channels),
+                    nn.GELU(),
+                    nn.Dropout(dropout)
+                ])
+                
+            current_in = out_channels
+        
+        self.model = nn.Sequential(*conv_layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
+
+
+class ConGRUFormer(nn.Module):
+    def __init__(
+            self,
+            in_channels: int,
+            cnn_units: list,
+            cnn_kernel_sizes: list,
+            cnn_strides: list,
+            cnn_paddings: list,
+            cnn_res_con=False,
+            rnn_units=256,
+            rnn_layers=1,
+            transformer_depth=256,
+            nhead=8,
+            num_encoders=6,
+            dropout=0.2,
+            transformer_dropout=0.3,
+            device='cuda'
+    ) -> None:
+        """
+        Architecture based on 1D convolution, GRU time-sequence processing and Transformer processing.
+        """
+        super().__init__()
+        self.device = device
+
+        # Time axis compression by CNN
+        self.cnn = MultiLayerConv1d(
+            in_channels,
+            cnn_units=cnn_units,
+            cnn_kernel_sizes=cnn_kernel_sizes,
+            cnn_strides=cnn_strides,
+            cnn_paddings=cnn_paddings,
+            use_residual_connections=cnn_res_con,
+            dropout=dropout,
+            device=device
+        )
+        # Output of CNN is (batch, cnn_units[-1], new_sequence_length)
+        depth = cnn_units[-1]
+        self.rnn = None
+
+        if rnn_layers > 0:
+            self.rnn = nn.GRU(depth, rnn_units, num_layers=rnn_layers, batch_first=True,
+                              dropout=dropout, bidirectional=True)
+            depth = rnn_units * 2
+            
+        # Linear projection with layer normalization from CNN/RNN output to TRANSFORMER input
+        self.d_model_proj = nn.Sequential(
+            nn.Linear(depth, transformer_depth),
+            nn.LayerNorm(transformer_depth),
+            nn.Dropout(dropout),
+            nn.ReLU()
+        )
+
+        # Use sinusoidal positional encoding
+        self.pos_encoder = PositionalEncoding(transformer_depth)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=transformer_depth,
+            dim_feedforward=transformer_depth * 4,
+            nhead=nhead,
+            dropout=transformer_dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True     # LayerNorm first
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoders, enable_nested_tensor=False)
+
+        self.attention_pool = MultiHeadPool(transformer_depth, nhead, transformer_dropout)
 
     def forward(self, x):
-        outs = [conv(x) for conv in self.branches]
-        x = torch.cat(outs, dim=1)
+        # CNN Feature extraction
+        x = self.cnn(x)  # (batch, cnn_units, seq)
+        x = x.permute(0, 2, 1)  # (batch, seq, cnn_units)
         
-        return self.act(self.bn(x))
+        # RNN processing
+        if self.rnn is not None:
+            x, _ = self.rnn(x)  # (batch, seq, rnn_units*2)
+        
+        # Project to transformer dimensions
+        x = self.d_model_proj(x)  # (batch, seq, d_model)
+        
+        # Add positional encoding
+        x = self.pos_encoder(x)
+        
+        # Transformer processing
+        x = self.transformer_encoder(x)  # (batch, seq, d_model)
+
+        # Multi-Head Attention pooling
+        x = self.attention_pool(x)  # (batch, d_model)
+
+        return x
+
+    def __str__(self):
+        model_describe = ""
+        model_describe += "CNN: " + str(self.cnn) + "\n" * 2
+        model_describe += "RNN: " + str(self.rnn) + "\n" * 2
+        model_describe += "Projection to transformer depth" + str(self.d_model_proj) + "\n" * 2
+        model_describe += str(self.pos_encoder) + "\n" * 2
+        model_describe += "Transformer Encoder: " + str(self.transformer_encoder) + "\n"
+        model_describe += "Attention pooling: " + str(self.attention_pool) + "\n" * 2
+        return model_describe

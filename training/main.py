@@ -174,7 +174,7 @@ if __name__ == "__main__":
         # Load the dataset. Normalization/scaling of audio not required.
         kfold_dataloader = KFoldRawAudioDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=-1.,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
-                                                use_augmentation=True, num_workers=0, test_size=0.2, outputs_path=outputs_path,
+                                                use_augmentation=True, num_workers=6, test_size=0.2, outputs_path=outputs_path,
                                                 transform_audio=None, sample_rate=sample_rate, moods=moods, random_state=random_state)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -205,7 +205,7 @@ if __name__ == "__main__":
         model = SpectrogramPreTrainedTransformer(encoder, output_dim, device=device).to(device)
     elif model_type == RAWTR:
         dropout = float(os.getenv("RAWTR_DROPOUT", 0.2))
-        model = RawAudioTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)        
+        model = TinyRawAudioTransformer(output_channels=output_dim, dropout=dropout, device=device).to(device)        
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
