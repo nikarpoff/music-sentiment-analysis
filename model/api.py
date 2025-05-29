@@ -31,21 +31,28 @@ classes = json.load(open(os.path.join(DATA_PATH, CLASSES_JSON_NAME), 'r'))
 
 @app.post("/api/model/predict")
 async def predict(file: UploadFile = File(...)):
+    # Load audio in bytes.
     audio_bytes = await file.read()
+
+    # Form mel-spectrogram
     spec = utils.get_mel_spec(audio_bytes)
     spec = torch.from_numpy(spec).float()
 
+    # Log current time.
     start_time = datetime.now()
     print(f"{start_time.strftime(TIMESTAMP_FORMAT)}: POST: spec shape: {spec.shape}")
 
+    # Make prediction.
     spec.to(model.device, non_blocking=True)
     spec = spec.unsqueeze(0)
     with torch.no_grad():
         probs = torch.softmax(model(spec), dim=1).cpu().numpy().flatten()
     
+    # Log prediction time.
     end_time = datetime.now()
     print(f"{end_time.strftime(TIMESTAMP_FORMAT)}: POST: prediction time: {end_time - start_time}")
 
+    # Form and send response.
     prediction = classes[probs.argmax()]
     
-    return {"predict": prediction, "logits": probs.tolist(), "classes": classes}
+    return {"predict": prediction, "probs": probs.tolist(), "classes": classes}

@@ -78,14 +78,16 @@ export default function Home() {
         formData.append("model_version", model);
 
         try {
-            const response = await fetch("http://localhost:8000/api/predict/", {
+            const response = await fetch("http://10.0.0.2/api/predict/", {
                 method: "POST",
                 body: formData,
             });
 
             if (!response.ok) {
-                customAlert("К сожалению, на сервере произошла внутренная ошибка. Попробуйте воспользоваться сервисом позже.")
-                throw new Error(`Ошибка: ${response.status}`);
+                const errorText = await response.text()
+                customAlert(`К сожалению, при отправке запроса произошла ошибка: ${errorText}`)
+                console.error(`Ошибка: ${response.status}`);
+                return null;
             }
 
             const result = await response.json();
@@ -109,14 +111,16 @@ export default function Home() {
         formData.append("model_version", model);
 
         try {
-            const response = await fetch("http://10.0.0.2/api/predict/jamendo/", {
+            const response = await fetch("http://10.0.0.2/api/predict/link/", {
                 method: "POST",
                 body: formData,
             });
 
             if (!response.ok) {
-                customAlert("К сожалению, на сервере произошла внутренная ошибка. Попробуйте воспользоваться сервисом позже.")
-                throw new Error(`Ошибка: ${response.status}`);
+                const errorText = await response.text()
+                customAlert(`К сожалению, при отправке запроса произошла ошибка: ${errorText}`)
+                console.error(`Ошибка: ${response.status}`);
+                return null;
             }
 
             const result = await response.json();
