@@ -20,4 +20,5 @@ import server_app.views as views
 
 urlpatterns = [
     path("api/predict/", views.MoodPrediction.as_view(), name = 'mood_prediction'),
+    path("api/predict/link/", views.MoodPredictionByLink.as_view(), name = 'mood_prediction_by_link'),
 ]
