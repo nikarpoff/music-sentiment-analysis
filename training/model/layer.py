@@ -47,7 +47,54 @@ class MultiHeadPool(nn.Module):
         # Residual connection & normalization
         out = self.norm(out + q.squeeze(1))
         return out
-    
+
+
+class CustomTransformerEncoderLayer(nn.TransformerEncoderLayer):
+    """
+    Custom transformer encoder layer with oveloaded forward:
+        this encoder applyes Multi-Head Attention with external query q.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, x, q):
+        if self.norm_first:
+            x = self.norm1(x)
+
+        x, _ = self.self_attn(query=q,
+                              key=x,
+                              value=x)
+        
+        out = q + self.dropout1(x)
+
+        if not self.norm_first:
+            out = self.norm1(out)
+        else:
+            out = self.norm2(out)
+        
+        x = self.linear2(self.dropout(self.activation(self.linear1(out))))
+
+        out = out + self.dropout2(x)
+
+        if not self.norm_first:
+            out = self.norm2(out)
+        
+        return out
+
+class CustomTransformerEncoder(nn.Module):
+    def __init__(self, encoder_layer, num_layers):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            encoder_layer
+            for _ in range(num_layers)
+        ])
+
+    def forward(self, src, q):
+        output = q
+        for layer in self.layers:
+            output = layer(src, output)
+        return output
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
@@ -189,6 +236,8 @@ class ConGRUFormer(nn.Module):
         """
         Architecture based on 1D convolution, GRU time-sequence processing and Transformer processing.
         """
+        assert rnn_layers != 0
+
         super().__init__()
         self.device = device
 
@@ -204,25 +253,28 @@ class ConGRUFormer(nn.Module):
             device=device
         )
         # Output of CNN is (batch, cnn_units[-1], new_sequence_length)
-        depth = cnn_units[-1]
-        self.rnn = None
+        depth_cnn = cnn_units[-1]
 
-        if rnn_layers > 0:
-            self.rnn = nn.GRU(depth, rnn_units, num_layers=rnn_layers, batch_first=True,
-                              dropout=dropout, bidirectional=True)
-            depth = rnn_units * 2
+        self.rnn = nn.GRU(depth_cnn, rnn_units, num_layers=rnn_layers, batch_first=True,
+                        dropout=dropout, bidirectional=True)
+        depth_rnn = rnn_units * 2
             
         # Linear projection with layer normalization from CNN/RNN output to TRANSFORMER input
-        self.d_model_proj = nn.Sequential(
-            nn.Linear(depth, transformer_depth),
+        self.x_proj = nn.Sequential(
+            nn.Linear(depth_cnn, transformer_depth),
+            nn.ReLU()
+        )
+
+        self.q_proj = nn.Sequential(
+            nn.Linear(depth_rnn, transformer_depth),
             nn.LayerNorm(transformer_depth),
-            nn.Dropout(dropout),
             nn.ReLU()
         )
 
         # Use sinusoidal positional encoding
         self.pos_encoder = PositionalEncoding(transformer_depth)
-        encoder_layer = nn.TransformerEncoderLayer(
+
+        encoder_layer = CustomTransformerEncoderLayer(
             d_model=transformer_depth,
             dim_feedforward=transformer_depth * 4,
             nhead=nhead,
@@ -231,8 +283,7 @@ class ConGRUFormer(nn.Module):
             batch_first=True,
             norm_first=True     # LayerNorm first
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoders, enable_nested_tensor=False)
-
+        self.transformer_encoder = CustomTransformerEncoder(encoder_layer, num_layers=num_encoders)
         self.attention_pool = MultiHeadPool(transformer_depth, nhead, transformer_dropout)
 
     def forward(self, x):
@@ -241,17 +292,18 @@ class ConGRUFormer(nn.Module):
         x = x.permute(0, 2, 1)  # (batch, seq, cnn_units)
         
         # RNN processing
-        if self.rnn is not None:
-            x, _ = self.rnn(x)  # (batch, seq, rnn_units*2)
+        q, _ = self.rnn(x)  # (batch, seq, rnn_units*2)
         
         # Project to transformer dimensions
-        x = self.d_model_proj(x)  # (batch, seq, d_model)
+        x = self.x_proj(x)  # (batch, seq, d_model)
+        q = self.q_proj(q)  # (batch, seq, d_model)
         
         # Add positional encoding
         x = self.pos_encoder(x)
+        q = self.pos_encoder(q)
         
         # Transformer processing
-        x = self.transformer_encoder(x)  # (batch, seq, d_model)
+        x = self.transformer_encoder(x, q)  # (batch, seq, d_model)
 
         # Multi-Head Attention pooling
         x = self.attention_pool(x)  # (batch, d_model)
@@ -262,7 +314,8 @@ class ConGRUFormer(nn.Module):
         model_describe = ""
         model_describe += "CNN: " + str(self.cnn) + "\n" * 2
         model_describe += "RNN: " + str(self.rnn) + "\n" * 2
-        model_describe += "Projection to transformer depth" + str(self.d_model_proj) + "\n" * 2
+        model_describe += "Projection X to transformer depth" + str(self.x_proj) + "\n" * 2
+        model_describe += "Projection Q to transformer depth" + str(self.q_proj) + "\n" * 2
         model_describe += str(self.pos_encoder) + "\n" * 2
         model_describe += "Transformer Encoder: " + str(self.transformer_encoder) + "\n"
         model_describe += "Attention pooling: " + str(self.attention_pool) + "\n" * 2

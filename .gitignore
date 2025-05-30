@@ -1,14 +1,16 @@
 # Outputs of sctipts
 outputs/
 runs/
+model/data
 
 # Citical data
 api_keys.json
 web/backend/.env
 nginx/
 
-# VS Code
+# VS Code and run scripts
 .vscode/
+*.bat
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

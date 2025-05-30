@@ -66,23 +66,15 @@ class SpectrogramTransformer(nn.Module):
         self.device = device
 
         # Model params
-        RNN_UNITS = 256
-        TRANSFORMER_DEPTH = 256
-        NHEAD = 16
-        NUM_ENCODERS = 6
-
-        TRANSFORMER_DROPOUT = 0.3
-
-        # Model params
-        CNN_UNITS = [128, 256, 512, 512, 256]
+        CNN_UNITS = [128, 256, 512, 1024, 512]
         CNN_KERNELS = [3] * len(CNN_UNITS)
         CNN_STRIDES = [2] * len(CNN_UNITS)
         CNN_PADDINGS = [0] * len(CNN_UNITS)
         RNN_UNITS = 256
         RNN_LAYERS = 2
-        TRANSFORMER_DEPTH = 256
-        NHEAD = 8
-        NUM_ENCODERS = 6
+        TRANSFORMER_DEPTH = 312
+        NHEAD = 6
+        NUM_ENCODERS = 4
 
         TRANSFORMER_DROPOUT = 0.3
 
@@ -92,7 +84,7 @@ class SpectrogramTransformer(nn.Module):
             cnn_kernel_sizes=CNN_KERNELS,
             cnn_strides=CNN_STRIDES,
             cnn_paddings=CNN_PADDINGS,
-            cnn_res_con=True,
+            cnn_res_con=False,
             rnn_units=RNN_UNITS,
             rnn_layers=RNN_LAYERS,
             transformer_depth=TRANSFORMER_DEPTH,

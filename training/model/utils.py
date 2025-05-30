@@ -164,7 +164,7 @@ class ModelTrainer():
                 epoch_val_time = time() - start_time
 
                 self.sheduler_on_plateau.step(val_avg_loss)     # reduce lr if no improvement
-                self.writer.add_scalar('Loss/validation', val_avg_loss)
+                self.writer.add_scalar('Loss/validation', val_avg_loss, self.iteration)
 
                 # Remember best validation loss.
                 if val_avg_loss < self.best_vloss:
@@ -217,7 +217,7 @@ class ModelTrainer():
         formated_learning_time = f"{days:02d} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
 
         # Close writer and save trained model. Saved model naming is model_name + moods number + timestamp. Save only weigths.
-        model_save_path = os.path.join(self.save_path, f"{self.model_name}_{end_timestamp.strftime(DATE_FORMAT)}.pth")
+        model_save_path = os.path.join(self.save_path, f"{self.model_name}_{end_timestamp.strftime(TIMESTAMP_FORMAT)}.pth")
         torch.save(self.model.state_dict(), model_save_path)
 
         print(f"Model saved to {model_save_path}\n\t best validation loss: {self.best_vloss:.3f}; total learning time: {formated_learning_time}")
