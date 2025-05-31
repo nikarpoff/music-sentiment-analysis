@@ -230,11 +230,11 @@ class ModelTrainer():
         fold_steps = self.epochs * epoch_steps
         self.sheduler_one_cycle = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
-            max_lr=self.lr * 5,
+            max_lr=self.lr * 10,
             total_steps=fold_steps,
-            pct_start=0.3,          # 30% for warm-up
+            pct_start=0.15,         # 15% for warm-up
             div_factor=10,          # div factor for start lr
-            final_div_factor=1e4,   # div factor for final lr
+            final_div_factor=1e3,   # div factor for final lr
             anneal_strategy='cos'   # cos strategy for decrease lr
         )
 
@@ -242,9 +242,9 @@ class ModelTrainer():
         self.sheduler_on_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
             mode='min',
-            factor=0.1,
-            cooldown=3,
-            eps=1e-8,
+            factor=0.2,
+            patience=2,
+            eps=1e-9,
         )
 
         # Set early stoping epochs without improving counter to zero.

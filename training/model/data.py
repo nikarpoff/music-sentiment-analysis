@@ -19,7 +19,7 @@ import json
 import numpy as np
 import pandas as pd
 from collections.abc import Iterator
-from abc import ABCMeta, abstractmethod
+from abc import abstractmethod
 
 from random import randint
 from ast import literal_eval

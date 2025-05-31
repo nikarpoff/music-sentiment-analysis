@@ -165,7 +165,7 @@ class MultiLayerConv1d(nn.Module):
             cnn_kernel_sizes: list,
             cnn_strides: list,
             cnn_paddings: list,
-            use_residual_connections=False,
+            residual_connections: list,
             dropout=0.1,
             device='cuda'
     ) -> None:
@@ -173,15 +173,15 @@ class MultiLayerConv1d(nn.Module):
         Multi-layer 1D convolution.
         """
         super().__init__()
-        assert len(cnn_units) == len(cnn_kernel_sizes) == len(cnn_strides)
+        assert len(cnn_units) == len(cnn_kernel_sizes) == len(cnn_strides) == len(cnn_paddings) == len(residual_connections)
         assert len(cnn_units) != 0
         self.device = device
 
         conv_layers = []
         current_in = in_channels
 
-        for out_channels, kernel_size, stride, padding in zip(cnn_units, cnn_kernel_sizes, cnn_strides, cnn_paddings):
-            if use_residual_connections:
+        for out_channels, kernel_size, stride, padding, res_con in zip(cnn_units, cnn_kernel_sizes, cnn_strides, cnn_paddings, residual_connections):
+            if res_con:
                 conv_layers.extend([
                     ResidualConv1d(
                         in_channels=current_in,
@@ -223,7 +223,7 @@ class ConGRUFormer(nn.Module):
             cnn_kernel_sizes: list,
             cnn_strides: list,
             cnn_paddings: list,
-            cnn_res_con=False,
+            cnn_res_con: list,
             rnn_units=256,
             rnn_layers=1,
             transformer_depth=256,
@@ -248,7 +248,7 @@ class ConGRUFormer(nn.Module):
             cnn_kernel_sizes=cnn_kernel_sizes,
             cnn_strides=cnn_strides,
             cnn_paddings=cnn_paddings,
-            use_residual_connections=cnn_res_con,
+            residual_connections=cnn_res_con,
             dropout=dropout,
             device=device
         )
@@ -290,7 +290,7 @@ class ConGRUFormer(nn.Module):
         # CNN Feature extraction
         x = self.cnn(x)  # (batch, cnn_units, seq)
         x = x.permute(0, 2, 1)  # (batch, seq, cnn_units)
-        
+    
         # RNN processing
         q, _ = self.rnn(x)  # (batch, seq, rnn_units*2)
         

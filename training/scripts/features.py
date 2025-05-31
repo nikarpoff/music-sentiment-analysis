@@ -17,26 +17,24 @@ import os
 import pandas as pd
 import numpy as np
 import librosa
+import soundfile as sf
 import scipy.stats
+
+# Multithreading imports
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from tqdm import tqdm
 
 from argparse import ArgumentParser
 
 
 def cli_arguments_preprocess() -> tuple:
-    """
-    Read, parse and preprocess command line arguments:
-        - path to source dataset. Required
-        - path to mel spectrograms. Should be related to dataset path. By default: "melspecs/"
-        - number of moods. By default: all moods (0)
-
-    Sorce dataset file should be named "autotagging_moodtheme.tsv"
-    """
-    parser = ArgumentParser(description="Preprocessing autotagging moods dataset script. Cleans moods, aggregates them and saves preprocessed .tsv file")
+    parser = ArgumentParser(description="Extract audio features from a dataset and saves result to path of source dataset.")
 
     parser.add_argument("--path", required=True,
                       help="Path to source dataset")
     
-    parser.add_argument("--name", required=True,
+    parser.add_argument("--name", required=False, default="dataset_all_moods.tsv",
                       help="Source dataset filename")
 
     args = parser.parse_args()
@@ -62,11 +60,7 @@ def extract_features(waveform, sr=22050, hop_length=512, n_mfcc=13):
     bandwidth = librosa.feature.spectral_bandwidth(y=waveform, sr=sr, hop_length=hop_length)[0]
     rolloff = librosa.feature.spectral_rolloff(y=waveform, sr=sr, roll_percent=0.85, hop_length=hop_length)[0]
     flatness = librosa.feature.spectral_flatness(y=waveform, hop_length=hop_length)[0]
-    contrast = librosa.feature.spectral_contrast(y=waveform, sr=sr, hop_length=hop_length)
     flux = librosa.onset.onset_strength(y=waveform, sr=sr, hop_length=hop_length)
-    mfcc = librosa.feature.mfcc(y=waveform, sr=sr, n_mfcc=n_mfcc, hop_length=hop_length)
-    delta_mfcc = librosa.feature.delta(mfcc)
-    delta2_mfcc = librosa.feature.delta(mfcc, order=2)
     chroma = librosa.feature.chroma_stft(y=waveform, sr=sr, hop_length=hop_length)
     tonnetz = librosa.feature.tonnetz(y=waveform, sr=sr)
 
@@ -94,16 +88,7 @@ def extract_features(waveform, sr=22050, hop_length=512, n_mfcc=13):
     features.update({f'bandwidth_{k}': v for k, v in stats(bandwidth).items()})
     features.update({f'rolloff_{k}': v for k, v in stats(rolloff).items()})
     features.update({f'flatness_{k}': v for k, v in stats(flatness).items()})
-    # contrast has shape (n_bands, frames)
-    for i, band in enumerate(contrast):
-        features.update({f'contrast_band{i+1}_{k}': v for k, v in stats(band).items()})
     features.update({f'flux_{k}': v for k, v in stats(flux).items()})
-
-    # MFCCs
-    for i in range(mfcc.shape[0]):
-        features.update({f'mfcc{i+1}_{k}': v for k, v in stats(mfcc[i]).items()})
-        features.update({f'delta_mfcc{i+1}_{k}': v for k, v in stats(delta_mfcc[i]).items()})
-        features.update({f'delta2_mfcc{i+1}_{k}': v for k, v in stats(delta2_mfcc[i]).items()})
 
     # Chroma and Tonnetz
     for i in range(chroma.shape[0]):
@@ -112,10 +97,31 @@ def extract_features(waveform, sr=22050, hop_length=512, n_mfcc=13):
         features.update({f'tonnetz{i+1}_{k}': v for k, v in stats(tonnetz[i]).items()})
 
     # Rhythm
-    features['tempo_librosa'] = tempo[0]
+    try:
+        features['tempo_librosa'] = float(tempo[0]) if hasattr(tempo, '__getitem__') else float(tempo)
+    except:
+        features['tempo_librosa'] = 0.0
+
     features['onset_rate'] = onset_rate
 
     return features
+
+
+def process_row(row_dict, dataset_path):
+    try:
+        path = os.path.join(dataset_path, row_dict["path"])
+        waveform, sr = sf.read(path)
+        if waveform.ndim > 1:
+            waveform = np.mean(waveform, axis=1)                # Convert to mono if stereo
+        waveform = waveform[: min(len(waveform), 60 * sr)]  # Limit to 1 minute
+        features = extract_features(waveform, sr)
+        features["track_id"] = row_dict["track_id"]
+        features["path"] = row_dict["path"]
+        features["tags"] = row_dict["tags"]
+        return features
+    except Exception as e:
+        print(f"Error processing {row_dict['path']}: {e}")
+        return None
 
 
 if __name__ == "__main__":
@@ -123,29 +129,36 @@ if __name__ == "__main__":
     dataset_full_path = os.path.join(dataset_path, dataset_source_name)
     save_dataset_path = os.path.join(dataset_path, f"features_{dataset_source_name}")
 
-    df = pd.read_csv(dataset_full_path, sep='\t')
-    features_array = []
+    # Read the dataset without splitting the last column.
+    with open(dataset_full_path, "r", encoding="utf-8") as file:
+        lines = file.readlines()
+    
+    columns_number = len(lines[0].split("\t"))
 
-    total_len = len(df)
-    report_times_percent = 10
-    report_frequency = total_len // report_times_percent
+    # Split lines by tabs; last column may contain multiple values.
+    data = [line.strip().split("\t", maxsplit=columns_number - 1) for line in lines]
+    
+    # Create a DataFrame
+    df = pd.DataFrame(data[1:], columns=data[0])  # First row as header
 
     print("Start to extract features...")
-    for i, row in df.iterrows():
-        waveform, sr = librosa.load(os.path.join(dataset_path, row["path"]))
-        features = extract_features(waveform, sr)
-        features["track_id"] = row["track_id"]
-        features["path"] = row["path"]
-        features["tags"] = row["tags"]
 
-        features_array.append(features)
-
-        if i+1 % report_frequency == 0:
-            print(f"\t Extracted {i+1}/{total_len}")
-
+    # Multithreading processing
+    rows = df.to_dict(orient='records')
+    with ProcessPoolExecutor() as executor:
+        results = list(
+            tqdm(
+                executor.map(
+                    partial(
+                        process_row, dataset_path=dataset_path
+                    ), rows
+                ), total=len(rows)
+            )
+        )
+    results = [r for r in results if r is not None]
     print("Features are extracted from all tracks!")
 
-    target_df = pd.DataFrame(features_array)
+    target_df = pd.DataFrame(results)
     target_df.to_csv(save_dataset_path, sep="\t", index=False)
 
     print(f"\t Target dataset saved to {save_dataset_path}")

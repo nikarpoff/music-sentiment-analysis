@@ -70,6 +70,7 @@ class SpectrogramTransformer(nn.Module):
         CNN_KERNELS = [3] * len(CNN_UNITS)
         CNN_STRIDES = [2] * len(CNN_UNITS)
         CNN_PADDINGS = [0] * len(CNN_UNITS)
+        CNN_RES_CON = [False] * len(CNN_UNITS)
         RNN_UNITS = 256
         RNN_LAYERS = 2
         TRANSFORMER_DEPTH = 312
@@ -84,7 +85,7 @@ class SpectrogramTransformer(nn.Module):
             cnn_kernel_sizes=CNN_KERNELS,
             cnn_strides=CNN_STRIDES,
             cnn_paddings=CNN_PADDINGS,
-            cnn_res_con=False,
+            cnn_res_con=CNN_RES_CON,
             rnn_units=RNN_UNITS,
             rnn_layers=RNN_LAYERS,
             transformer_depth=TRANSFORMER_DEPTH,

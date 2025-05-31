@@ -23,9 +23,10 @@ class TinyRawAudioTransformer(nn.Module):
         self.device = device
 
         # Model params
-        CNN_UNITS = [128, 256, 512, 512, 1024, 512, 256]
-        CNN_KERNELS = [7, 5, 3, 3, 3, 3, 3]
-        CNN_STRIDES = [3, 3, 2, 2, 2, 2, 2]
+        CNN_UNITS = [128, 256, 512, 1024, 512, 256]
+        CNN_KERNELS = [10, 5, 3, 3, 3, 3]
+        CNN_STRIDES = [7, 3, 2, 2, 2, 2]
+        CNN_RES_CON = [False, False, True, True, True, True]
         CNN_PADDINGS = [0] * len(CNN_UNITS)
         RNN_UNITS = 256
         RNN_LAYERS = 2
@@ -41,7 +42,7 @@ class TinyRawAudioTransformer(nn.Module):
             cnn_kernel_sizes=CNN_KERNELS,
             cnn_strides=CNN_STRIDES,
             cnn_paddings=CNN_PADDINGS,
-            cnn_res_con=False,
+            cnn_res_con=CNN_RES_CON,
             rnn_units=RNN_UNITS,
             rnn_layers=RNN_LAYERS,
             transformer_depth=TRANSFORMER_DEPTH,
