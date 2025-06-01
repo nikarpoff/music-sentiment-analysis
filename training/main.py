@@ -26,10 +26,11 @@ from sklearn.preprocessing import MinMaxScaler
 
 from config import *
 
-from model.data import KFoldSpecsDataLoader, KFoldRawAudioDataLoader
+from model.data import *
 from model.specstr import *
 from model.utils import *
 from model.rawtr import *
+from model.features import *
 
 
 def cli_arguments_preprocess() -> str:
@@ -44,6 +45,9 @@ def cli_arguments_preprocess() -> str:
 
     parser.add_argument("--path", required=True,
                         help="Path to source dataset")
+    
+    parser.add_argument("--dname", required=False,
+                        help="Dataset name to load. By default: dataset_<moods>_moods.tsv")
     
     parser.add_argument("--model", required=True,
                         choices=AVAILABLE_MODELS,
@@ -72,7 +76,13 @@ def cli_arguments_preprocess() -> str:
     elif args.mname is None and args.model in PRETRAINED_MODELS:
         parser.error("For use pretrained model you must provide the name of saved model (with file extention)")
 
-    return os.path.abspath(args.path), args.model, args.mname, args.task, args.moods
+    if args.dname is None and args.model in FEATURES_MODELS:
+        parser.error("For use any model based on features instead of audio/spectrograms you must provide dataset filename with features (dataset_features.tsv)")
+    
+    if args.dname is None:
+        args.dname = "dataset_all_moods.tsv" if args.moods == "all" else f"dataset_{args.moods}_moods.tsv"
+
+    return os.path.abspath(args.path), args.dname, args.model, args.mname, args.task, args.moods
 
 def get_specs_scaler(melspecs_stats_path) -> MinMaxScaler:
     """
@@ -105,7 +115,7 @@ def get_specs_scaler(melspecs_stats_path) -> MinMaxScaler:
 
 if __name__ == "__main__":
     # Read command line arguments.
-    dataset_path, model_type, model_name, task_type, moods = cli_arguments_preprocess()
+    dataset_path, dataset_name, model_type, model_name, task_type, moods = cli_arguments_preprocess()
 
     # Load environment variables.
     load_dotenv()
@@ -134,8 +144,6 @@ if __name__ == "__main__":
     total_moods = int(os.getenv("TOTAL_MOODS", 59))
     kfold_splits = int(os.getenv("KFOLD_SPLITS", 5))
 
-    # Set the dataset name based on the moods number.
-    dataset_name = "dataset_all_moods.tsv" if moods == "all" else f"dataset_{moods}_moods.tsv"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     moods_number = total_moods
 
@@ -176,6 +184,12 @@ if __name__ == "__main__":
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
                                                 use_augmentation=True, num_workers=6, test_size=0.2, outputs_path=outputs_path,
                                                 transform_audio=None, sample_rate=sample_rate, moods=moods, random_state=random_state)
+    elif model_type in FEATURES_MODELS:
+        kfold_dataloader = KFoldFeaturesDataLoader(dataset_path, dataset_name, kfold_splits, target_mode,
+                                                   batch_size=batch_size, num_workers=2,
+                                                   test_size=0.2, outputs_path=outputs_path, moods=moods,
+                                                   random_state=random_state)
+        input_features_number = kfold_dataloader.get_input_features_number()
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -205,7 +219,10 @@ if __name__ == "__main__":
         model = SpectrogramPreTrainedTransformer(encoder, output_dim, device=device).to(device)
     elif model_type == RAWTR:
         dropout = float(os.getenv("RAWTR_DROPOUT", 0.2))
-        model = TinyRawAudioTransformer(output_channels=output_dim, dropout=dropout, device=device).to(device)        
+        model = TinyRawAudioTransformer(output_channels=output_dim, dropout=dropout, device=device).to(device)
+    elif model_type == FEAMLP:
+        dropout = float(os.getenv("FEAMLP_DROPOUT", 0.1))
+        model = FeaturesDense(input_features_number ,output_channels=output_dim, dropout=dropout, device=device).to(device)        
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

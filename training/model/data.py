@@ -192,6 +192,7 @@ class KFoldDataLoader(Iterator):
 
         # Use dataframe next.
         y = pd.DataFrame(y)
+        df = df.drop(columns=['tags'])  # remove tags column, it is not needed anymore
 
         # Save classes and encoded labels conformity to json file.
         if self.random_state is not None:
@@ -306,6 +307,58 @@ class KFoldSpecsDataLoader(KFoldDataLoader):
             persistent_workers=self.persistent_workers,
             collate_fn=collate_fn,
         )
+
+class KFoldFeaturesDataLoader(KFoldDataLoader):
+    """
+    Load the audio features dataset and create DataLoader objects for train/val folds and testing supsets.
+
+    Splits train/test as 1 - test_size / test_size (0.8 / 0.2 by default).
+    """
+    def __init__(self, dataset_path: str, dataset_name: str, splits: int, target_mode: str, test_size=0.2, batch_size=32, 
+                num_workers=8, outputs_path='./outputs', moods="all", random_state=None):
+        super().__init__(dataset_path, dataset_name, splits, target_mode, test_size, batch_size, num_workers, outputs_path, moods, random_state)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return super().__next__()
+
+    def _get_loader(self, x, y, for_train=True):
+        dataset = FeaturesDataset(x, y)
+
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=self.num_workers,
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers,
+        )
+    
+    def get_input_features_number(self):
+        """
+        Returns number of input features.
+        """
+        return self.x_train.shape[1] - 2  # -2 because of track_id and path columns
+
+
+class FeaturesDataset(Dataset):
+    """
+    Loader of audio features dataset.
+    """
+    def __init__(self, x: pd.DataFrame, y: pd.DataFrame):
+        self.x = x.drop(columns=['track_id', 'path'])
+        self.y = y
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        inputs = torch.tensor(self.x.iloc[idx].to_numpy(), dtype=torch.float)  # size (num_features,)
+        label = torch.tensor(self.y.iloc[idx].to_numpy(), dtype=torch.float)   # size (num_classes,)
+        return inputs, label
 
 
 class KFoldRawAudioDataLoader(KFoldDataLoader):
