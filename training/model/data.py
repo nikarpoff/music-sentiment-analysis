@@ -35,6 +35,8 @@ from sklearn.base import TransformerMixin
 from sklearn.model_selection import KFold, train_test_split
 from sklearn.preprocessing import OneHotEncoder, MultiLabelBinarizer, LabelEncoder
 
+from transformers import WhisperTokenizer   # Tokenizer for text sentiment classification
+from datasets import load_dataset           # Hugging Face Datasets
 
 from config import *
 
@@ -83,10 +85,7 @@ def melspecs_classify_collate_fn(batch):
 
     # Return initial dimensions order (batch, channel, time)
     xs_padded = xs_padded.permute(0, 2, 1)
-    
-    ys = torch.stack(ys)
-
-    return xs_padded, ys
+    return xs_padded, torch.tensor(ys)
 
 def melspecs_autoencode_collate_fn(batch):
     """
@@ -119,15 +118,13 @@ class PadAugmentCollate:
         if self.for_train and (self.augmentation is not None):
             xs_padded = self.augmentation.transform(xs_padded)
 
-        ys = torch.stack(ys)
-
         # for i in range(xs_padded.shape[0]):
         #     torchaudio.save(
         #         uri=f"F:/dataset/music/augmented{i}_{ys[i].argmax()}.wav",
         #         src=xs_padded[i],
         #         sample_rate=16000,
         #     )
-        return xs_padded, ys
+        return xs_padded, torch.tensor(ys)
 
 
 class KFoldDataLoader(Iterator):
@@ -185,8 +182,8 @@ class KFoldDataLoader(Iterator):
         # Select the target transformation based on the target mode.
         if self.target_mode == MULTILABEL_TARGET:
             y, classes = multi_label_binarize(df['tags'].apply(literal_eval))  # process the labels, apply literal_eval to convert strings to lists
-        elif self.target_mode == ONE_HOT_TARGET:
-            y, classes = one_hot_encode_labels(df['tags'].to_frame())  # process the labels to one-hot vectors
+        # elif self.target_mode == ONE_HOT_TARGET:
+        #     y, classes = one_hot_encode_labels(df['tags'].to_frame())  # process the labels to one-hot vectors
         else:
             y, classes = label_encode(df['tags'])  # simple label encoding
 
@@ -412,6 +409,68 @@ class KFoldRawAudioDataLoader(KFoldDataLoader):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=self.persistent_workers,
             collate_fn=collate_fn,
+        )
+    
+
+class TextSentimentDataLoader:
+    """
+    Load the dataset of text sentiments and create DataLoader objects for train/val folds and testing supsets.
+    Splits train/test as 1 - test_size / test_size (0.8 / 0.2 by default).
+
+    Uses Hugging Face Datasets library to load the multilanguage dataset. Tokenize text with WhisperTokenizer:
+        (for models TextExtractor -> LirycsSentimentTransformer consistency).
+    """
+    def __init__(self, batch_size=32, num_classes=3, num_workers=8, max_length: int = 128, whisper_model_name: str = "openai/whisper-small", random_state=None):
+        self.tokenizer = WhisperTokenizer.from_pretrained(whisper_model_name)
+        self.max_length = max_length
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.random_state = random_state
+        self.num_classes = num_classes
+
+        if num_workers == 0:
+            self.prefetch_factor = None
+            self.persistent_workers = False
+        else:
+            self.prefetch_factor = 2
+            self.persistent_workers = True
+
+        print("Tokenizer vocab size:", self.tokenizer.vocab_size)
+
+    def preprocess(self, example):
+        enc = self.tokenizer(
+            example["text"],
+            padding="max_length",
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        return {
+            "input_ids": enc["input_ids"].squeeze(0),               # tokenized indices from whisper dictionary
+            "attention_mask": enc["attention_mask"].squeeze(0),     # attention mask for padding masking
+            "labels": example["label"],                             # target labels
+        }
+
+    def get_loaders(self):
+        dataset = load_dataset("tyqiangz/multilingual-sentiments", "all")
+
+        dataset = dataset.map(
+            self.preprocess,
+            remove_columns=dataset["train"].column_names,
+        )
+        dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+
+        return self._get_loader(dataset, "train"), self._get_loader(dataset, "validation"), self._get_loader(dataset, "test")
+        
+    def _get_loader(self, dataset, supset):
+        return DataLoader(
+            dataset[supset],
+            batch_size=self.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=self.num_workers,
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers,
         )
     
 

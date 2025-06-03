@@ -27,11 +27,11 @@ from sklearn.preprocessing import MinMaxScaler
 from config import *
 
 from model.data import *
+from model.text import *
 from model.specstr import *
 from model.utils import *
 from model.rawtr import *
 from model.features import *
-
 
 def cli_arguments_preprocess() -> str:
     """
@@ -174,7 +174,7 @@ if __name__ == "__main__":
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
                                                 use_augmentation=True, num_workers=4, test_size=0.2, outputs_path=outputs_path,
                                                 transform_specs=transform_specs, moods=moods, random_state=random_state)
-    elif model_type in RAW_AUDIO_MODELS:
+    elif model_type in RAW_AUDIO_MODELS or model_type in LIRYCS_MODELS:  # raw audio models or audio->lirycs models required raw audio data loader
         max_seq_len = int(os.getenv(f"{model_type.upper()}_MAX_SEQ_LEN", 50000))
         min_seq_len = int(os.getenv(f"{model_type.upper()}_MIN_SEQ_LEN", 20000))
         sample_rate = int(os.getenv(f"{model_type.upper()}_SAMPLE_RATE", 22050))
@@ -219,10 +219,21 @@ if __name__ == "__main__":
         model = SpectrogramPreTrainedTransformer(encoder, output_dim, device=device).to(device)
     elif model_type == RAWTR:
         dropout = float(os.getenv("RAWTR_DROPOUT", 0.2))
-        model = TinyRawAudioTransformer(output_channels=output_dim, dropout=dropout, device=device).to(device)
+        model = RawAudioTransformer(output_channels=output_dim, dropout=dropout, device=device).to(device)
+    elif model_type == PRETRAINED_RAWTR:
+        dropout = float(os.getenv("RAWTR_DROPOUT", 0.2))
+        model = PretrainedRawAudioTransformer(output_channels=output_dim, dropout=dropout, device=device).to(device)
     elif model_type == FEAMLP:
         dropout = float(os.getenv("FEAMLP_DROPOUT", 0.1))
         model = FeaturesDense(input_features_number ,output_channels=output_dim, dropout=dropout, device=device).to(device)        
+    elif model_type == LIRYCSTR:
+        dropout = float(os.getenv("LIRYCSTR_DROPOUT", 0.2))
+        max_text_len = int(os.getenv("LIRYCSTR_MAX_TEXT_LEN", 128))
+        whisper_model_name = str(os.getenv("WHISPER_MODEL_NAME", "openai/whisper-small"))
+
+        text_extractor = TextExtractor(max_seq_len=max_text_len, whisper_model_name=whisper_model_name, device=device).to(device)
+        text_transformer = TextTransformer(depth=256, nheads=8, num_encoders=8, dropout=dropout, whisper_model_name=whisper_model_name, device=device).to(device)
+        model = LirycsSentimentTransformer(text_extractor, text_transformer, output_channels=output_dim, device=device).to(device)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

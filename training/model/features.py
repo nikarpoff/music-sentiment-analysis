@@ -34,7 +34,7 @@ class FeaturesDense(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self.output_proj = nn.Linear(128, output_channels)
+        self.output_proj = nn.Linear(64, output_channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.mlp(x)
