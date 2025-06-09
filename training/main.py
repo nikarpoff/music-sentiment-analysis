@@ -26,10 +26,10 @@ from sklearn.preprocessing import MinMaxScaler
 
 from config import *
 
-from model.data import *
+from utils.utils import *
+from utils.data import *
 from model.text import *
 from model.specstr import *
-from model.utils import *
 from model.rawtr import *
 from model.features import *
 
@@ -260,7 +260,7 @@ if __name__ == "__main__":
 
         if task_type == "train":
             # In train we starts with new model.
-                trainer.init_new_train()
+            trainer.init_new_train()
         else:
             # In continues train we starts with loaded model.
             trainer.init_continue_train(saved_model_name=model_name)

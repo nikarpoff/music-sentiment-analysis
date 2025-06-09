@@ -24,14 +24,14 @@ class RawAudioTransformer(nn.Module):
         self.device = device
 
         # Model params
-        CNN_UNITS = [256, 512, 512, 1024, 1024, 512, 256]
-        CNN_KERNELS = [10, 5, 3, 3, 3, 3, 3]
-        CNN_STRIDES = [7, 3, 2, 2, 2, 2, 2]
-        CNN_RES_CON = [False, False, True, True, True, True, True]
+        CNN_UNITS = [128, 256, 512, 1024, 512, 256]
+        CNN_KERNELS = [10, 5, 3, 3, 3, 3]
+        CNN_STRIDES = [7, 3, 2, 2, 2, 2]
+        CNN_RES_CON = [False, False, True, True, True, True]
         CNN_PADDINGS = [0] * len(CNN_UNITS)
         RNN_UNITS = 256
         RNN_LAYERS = 2
-        TRANSFORMER_DEPTH = 432
+        TRANSFORMER_DEPTH = 312
         NHEAD = 6
         NUM_ENCODERS = 4
 

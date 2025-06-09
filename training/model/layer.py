@@ -240,6 +240,7 @@ class ConGRUFormer(nn.Module):
 
         super().__init__()
         self.device = device
+        self.depth = transformer_depth
 
         # Time axis compression by CNN
         self.cnn = MultiLayerConv1d(

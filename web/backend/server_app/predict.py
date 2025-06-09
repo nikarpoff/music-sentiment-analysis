@@ -34,6 +34,7 @@ class Prediction:
 
         return_dict['response'] = result_dict
         return_dict['status'] = status.HTTP_200_OK
+        return return_dict
 
     def _form_not_ok_response(self, text, status_code):
         return_dict = {}

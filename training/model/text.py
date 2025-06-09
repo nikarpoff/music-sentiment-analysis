@@ -32,6 +32,9 @@ class TextTransformer(nn.Module):
 
         self.embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=depth)
 
+        for param in self.embedding.parameters():
+            param.requires_grad = False
+
         self.pos_encoding = PositionalEncoding(d_model=depth)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=depth,
@@ -79,7 +82,10 @@ class TextExtractor(nn.Module):
           - padding_mask: torch.LongTensor (batch_size, text_len) — mask with zero in padding/special tokens.
         """
         x = x.squeeze(1).to("cpu")
-        p = self.processor(x, sampling_rate=16000, return_tensors="pt")
+
+        list_of_x_els = [x_i for x_i in x.cpu().numpy()]
+
+        p = self.processor(list_of_x_els, sampling_rate=16000, return_tensors="pt")
         input_features = p.input_features.to(self.device)
         
         generated_ids = self.model.generate(
@@ -105,12 +111,17 @@ class TextSentimentTransformer(nn.Module):
         self.device = device
 
         # Model params
-        TRANSFORMER_DEPTH = 432
+        TRANSFORMER_DEPTH = 312
         NHEAD = 6
         NUM_ENCODERS = 4
 
         self.transformer = TextTransformer(TRANSFORMER_DEPTH, NHEAD, NUM_ENCODERS, dropout, whisper_model_name, device=device)
-        self.output_proj = nn.Linear(TRANSFORMER_DEPTH, output_channels)
+        self.output_proj = nn.Sequential(
+            nn.Linear(TRANSFORMER_DEPTH, TRANSFORMER_DEPTH // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(TRANSFORMER_DEPTH // 2, output_channels)
+        )
 
     def forward(self, tokens_ids: torch.Tensor, padding_mask: torch.Tensor) -> torch.Tensor:
         """
@@ -126,14 +137,13 @@ class LirycsSentimentTransformer(nn.Module):
     Predict lirycs sentiment using pipeline: TextExtractor -> TransformerWithPooling -> Output Projection.
     Input data is raw audio, output is sentiment logits (output_channels,).
     """
-    def __init__(self, text_extractor: TextExtractor, transformer: TextTransformer, output_channels: int, device='cuda'):
+    def __init__(self, text_extractor: TextExtractor, transformer: TextTransformer, device='cuda'):
         super().__init__()
         self.device = device
         self.text_extractor = text_extractor
         self.transformer = transformer
-        self.output_proj = nn.Linear(transformer.depth, output_channels)
+        self.depth = transformer.depth
 
     def forward(self, waveform: torch.Tensor) -> torch.Tensor:
         text_ids, padding_mask = self.text_extractor(waveform)
-        features = self.transformer(text_ids, padding_mask)
-        return self.output_proj(features)
+        return self.transformer(text_ids, padding_mask)

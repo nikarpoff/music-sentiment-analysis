@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 
 from config import *
-from model.data import KFoldSpecsDataLoader
+from utils.data import KFoldSpecsDataLoader
 
 
 class EarlyStopping:
@@ -263,7 +263,17 @@ class ClassificationModelTrainer(ModelTrainer):
     Model trainer. Save checkpoints and trained model to save_path.
     Correctly works with two losses and tasks types: multilabel classification, single-label classification, autoencoder regression
     """
-    def __init__(self, model, model_name: str, save_path: str, target_mode: str, kfold_loader: KFoldSpecsDataLoader, lr: float, epochs: int, l2_reg: float, num_classes: int = None):
+    def __init__(self,
+                 model,
+                 model_name: str, 
+                 save_path: str,
+                 target_mode: str,
+                 kfold_loader: KFoldSpecsDataLoader,
+                 lr: float,
+                 epochs: int,
+                 l2_reg: float,
+                 data_mode: str = "default",
+                 num_classes: int = None):
         """
         :param num_classes: Number of moods to classify. If None -> target_mode should not be classification.
         :param task_type: Type of the task: multilabel classification, single-label classification or autoencoder regression.
@@ -287,9 +297,14 @@ class ClassificationModelTrainer(ModelTrainer):
             self.loss_function = torch.nn.BCEWithLogitsLoss()
             self.is_multilabel = True
         elif target_mode == AUTOENCODER_TARGET:
-            self.loss_function = torch.nn.MSELoss()
+            raise ValueError(f"Target mode {target_mode} not available in ClassificationModelTrainer")
+        
+        if data_mode == "audiospecs":
+            self.model_call = self._audio_spec_model_call
+        elif data_mode == "default":
+            self.model_call = self._default_model_call
         else:
-            raise ValueError(f"Unknown target mode provided: {target_mode}")
+            raise ValueError(f"Unknown data_model: {data_mode}")
 
     def _compute_and_reset_metrics(self):
         precision = self.precision_metric.compute().item()
@@ -313,13 +328,12 @@ class ClassificationModelTrainer(ModelTrainer):
 
         for i, data in enumerate(loader):
             inputs, labels = data
-            inputs = inputs.to(self.model.device, non_blocking=True)
             labels = labels.to(self.model.device, non_blocking=True).long()
 
             self.optimizer.zero_grad()
 
             with torch.amp.autocast("cuda"):
-                outputs = self.model(inputs)
+                outputs = self.model_call(inputs)
                 loss = self.loss_function(outputs, labels)
 
             # Scaled Backward Pass and gradient Clipping
@@ -366,10 +380,8 @@ class ClassificationModelTrainer(ModelTrainer):
         with torch.no_grad():
             for i, data in enumerate(loader):
                 inputs, labels = data
-                inputs = inputs.to(self.model.device, non_blocking=True)
                 labels = labels.to(self.model.device, non_blocking=True).long()
-
-                outputs = self.model(inputs)
+                outputs = self.model_call(inputs)
                 loss = self.loss_function(outputs, labels)
 
                 running_loss += loss
@@ -387,14 +399,12 @@ class ClassificationModelTrainer(ModelTrainer):
         print(f"\t Validation: precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}\n")
         return val_avg_loss
 
-
     def update_classification_metrics(self, model_output, labels):
         if self.is_multilabel:
             labels_true = labels.int()
             labels_pred = (model_output > 0.5).int()
         else:
-            labels_true = labels.int()
-            labels_pred = torch.nn.Softmax(dim=1)(model_output)
+            labels_true = labels.long()
             labels_pred = torch.argmax(model_output, dim=1)
 
         self.precision_metric.update(labels_pred, labels_true)
@@ -475,7 +485,17 @@ class AutoencoderModelTrainer(ModelTrainer):
         return val_avg_loss
 
 
-def evaluate_classification_model(model, classes, target_mode, test_loader):
+def audio_spec_model_call(model: torch.nn.Module, inputs):
+    audio, spec = inputs
+    audio = audio.to(model.device, non_blocking=True)
+    specs = specs.to(model.device, non_blocking=True)
+    return model(audio, spec)
+
+def default_model_call(model: torch.nn.Module, inputs):
+    inputs = inputs.to(model.device, non_blocking=True)
+    return model(inputs)
+
+def evaluate_classification_model(model, classes, target_mode, test_loader, data_mode="default"):
     num_classes = len(classes)
     if target_mode == ONE_HOT_TARGET:
         precision_metric = MulticlassPrecision(num_classes=num_classes, average='macro').to(model.device)
@@ -507,10 +527,13 @@ def evaluate_classification_model(model, classes, target_mode, test_loader):
     with torch.no_grad():
         for i, data in enumerate(test_loader):
             inputs, labels = data
-            inputs = inputs.to(model.device, non_blocking=True)
-            labels = labels.to(model.device, non_blocking=True)
-
-            outputs = model(inputs)
+            labels = labels.to(model.device, non_blocking=True).long().squeeze()
+            
+            if data_mode == "audiospecs":
+                outputs = audio_spec_model_call(model, inputs)
+            else:
+                outputs = default_model_call(model, inputs)
+                
             loss = loss_function(outputs, labels)
 
             running_loss += loss
@@ -519,8 +542,7 @@ def evaluate_classification_model(model, classes, target_mode, test_loader):
                 labels_true = labels.int()
                 labels_pred = (outputs > 0.5).int()
             else:
-                labels_true = torch.argmax(labels, dim=1)
-                labels_pred = torch.nn.Softmax(dim=1)(outputs)
+                labels_true = labels.long()
                 labels_pred = torch.argmax(outputs, dim=1)
 
             precision_metric.update(labels_pred, labels_true)
@@ -553,8 +575,6 @@ def evaluate_classification_model(model, classes, target_mode, test_loader):
     plt.ylabel("True label")
     plt.title("Confusion Matrix")
     plt.show()
-
-
 
 def evaluate_autoencoder(model, test_loader):
     print("Evaluating model...")
@@ -589,159 +609,3 @@ def get_params_count(model: torch.nn.Module) -> tuple:
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total_params, trainable_params
-
-
-def train_text_sentiment_model(
-    model: torch.nn.Module,
-    model_name: str,
-    save_path: str,
-    num_classes: int,
-    train_loader,
-    val_loader,
-    lr: float,
-    epochs: int,
-    l2_reg: float,
-):
-    """
-    Train text sentiment analysis transformer model.
-    """
-
-    start_timestamp = datetime.now()
-    date = start_timestamp.strftime(DATE_FORMAT)
-    timestamp = start_timestamp.strftime(TIMESTAMP_FORMAT)
-    writer = SummaryWriter(f'runs/train_{model_name}_{timestamp}')
-    report_interval = 20
-    
-    total_batches = len(train_loader)
-    
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=l2_reg)
-
-    precision_metric = MulticlassPrecision(num_classes=num_classes, average='macro').to(model.device)
-    recall_metric = MulticlassRecall(num_classes=num_classes, average='macro').to(model.device)
-    f1_metric = MulticlassF1Score(num_classes=num_classes, average='macro').to(model.device)
-
-    loss_function = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
-    
-    cuda_scaler = torch.amp.GradScaler("cuda")
-
-    for epoch in range(epochs):
-        running_loss = 0.0
-        model.train()
-
-        for i, batch in enumerate(train_loader):
-            input_ids = batch["input_ids"].to(model.device, non_blocking=True)
-            attention_mask = batch["attention_mask"].to(model.device, non_blocking=True)
-            labels = batch["labels"].to(model.device, non_blocking=True)
-
-            with torch.amp.autocast("cuda"):
-                outputs = model(input_ids, attention_mask)
-                loss = loss_function(outputs, labels)
-
-            # Scaled Backward Pass and gradient Clipping
-            cuda_scaler.scale(loss).backward()
-            cuda_scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
-            cuda_scaler.step(optimizer)
-            cuda_scaler.update()
-
-            running_loss += loss.item()
-
-            labels_true = labels
-            labels_pred = torch.nn.Softmax(dim=1)(outputs)
-            labels_pred = torch.argmax(outputs, dim=1)
-
-            precision_metric.update(labels_pred, labels_true)
-            recall_metric.update(labels_pred, labels_true)
-            f1_metric.update(labels_pred, labels_true)
-
-            # Report 20 times per epoch
-            if i % report_interval == report_interval - 1:
-                time_per_batch = (time() - start_time) / report_interval
-                avg_loss = running_loss / report_interval
-
-                print(f'\t batch [{i + 1}/{total_batches}] - loss: {avg_loss:.5f}\t time per batch: {time_per_batch:.2f}')
-                current_step = epoch * total_batches + i
-                writer.add_scalar('Loss/train', avg_loss, current_step)
-                running_loss = 0.
-                start_time = time()
-
-        # Log metrics.
-        precision = precision_metric.compute().item()
-        recall = recall_metric.compute().item()
-        f1 = f1_metric.compute().item()
-
-        precision_metric.reset()
-        recall_metric.reset()
-        f1_metric.reset()
-
-        writer.add_scalar('Precision/train', precision, epoch)
-        writer.add_scalar('Recall/train', recall, epoch)
-        writer.add_scalar('F1/train', f1, epoch)
-
-        print(f"\t Training: precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}\n")
-        
-        # Validation
-        model.eval()
-        val_batches = len(val_loader)
-        running_loss = 0.
-
-        with torch.no_grad():
-            for i, batch in enumerate(train_loader):
-                input_ids = batch["input_ids"].to(model.device, non_blocking=True)
-                attention_mask = batch["attention_mask"].to(model.device, non_blocking=True)
-                labels = batch["labels"].to(model.device, non_blocking=True)
-
-                outputs = model(input_ids, attention_mask)
-                loss = loss_function(outputs, labels)
-
-                running_loss += loss
-
-                labels_true = torch.argmax(labels, dim=1)
-                labels_pred = torch.nn.Softmax(dim=1)(outputs)
-                labels_pred = torch.argmax(outputs, dim=1)
-
-                precision_metric.update(labels_pred, labels_true)
-                recall_metric.update(labels_pred, labels_true)
-                f1_metric.update(labels_pred, labels_true)
-
-        val_avg_loss = running_loss / val_batches
-
-        # Log metrics.
-        precision = precision_metric.compute().item()
-        recall = recall_metric.compute().item()
-        f1 = f1_metric.compute().item()
-
-        precision_metric.reset()
-        recall_metric.reset()
-        f1_metric.reset()
-
-        writer.add_scalar('Precision/train', precision, epoch)
-        writer.add_scalar('Recall/train', recall, epoch)
-        writer.add_scalar('F1/train', f1, epoch)
-
-        print(f"\t Validation: precision: {precision:.3f}\t recall: {recall:.3f}\t F1: {f1:.3f}\n")
-
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-        }, os.path.join(save_path, f"{model_name}_checkpoint_{timestamp}_epoch_{epoch + 1}.pth"))
-
-        
-    # Train end!
-    writer.close()
-
-    # Get total train time and formate it.
-    end_timestamp = datetime.now()
-    total_learning_time = (end_timestamp - start_timestamp)
-    days = total_learning_time.days
-    hours, remainder = divmod(total_learning_time.seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    formated_learning_time = f"{days:02d} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
-
-    # Close writer and save trained model. Saved model naming is model_name + moods number + timestamp. Save only weigths.
-    model_save_path = os.path.join(save_path, f"{model_name}_{end_timestamp.strftime(TIMESTAMP_FORMAT)}.pth")
-    torch.save(model.state_dict(), model_save_path)
-
-    print(f"Model saved to {model_save_path}\n\t total learning time: {formated_learning_time}")
-    

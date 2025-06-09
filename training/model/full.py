@@ -27,25 +27,26 @@ class HeterogeneousDataSentimentClassifier(nn.Module):
                  specs_model: nn.Module,
                  text_model: nn.Module | None = None,
                  audio_model: nn.Module | None = None,
-                 features_model: nn.Module | None = None,
                  dropout: float = 0.2,
                  device='cuda'):
         super().__init__()
         self.specs_model = specs_model
+        
+        for param in self.specs_model.parameters():
+            param.requires_grad = False
+
         self.text_model = text_model
         self.audio_model = audio_model
-        self.features_model = features_model
-
+        
         self.depth = specs_model.depth if hasattr(specs_model, 'depth') else 256
 
         if text_model is not None:
             self.depth += text_model.depth if hasattr(text_model, 'depth') else 256
             
         if audio_model is not None:
-            self.depth += audio_model.depth if hasattr(text_model, 'depth') else 256
-            
-        if features_model is not None:
-            self.depth += features_model.depth if hasattr(text_model, 'depth') else 64
+            for param in self.audio_model.parameters():
+                param.requires_grad = False
+            self.depth += audio_model.depth if hasattr(audio_model, 'depth') else 256
 
         self.output_projection = nn.Sequential(
             nn.Linear(self.depth, 256, bias=False),
@@ -68,30 +69,17 @@ class HeterogeneousDataSentimentClassifier(nn.Module):
 
         self.device = device
 
-    def forward(self, spec_input: torch.Tensor, audio_input: torch.Tensor | None = None, features_input: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, audio_input, spec_input) -> torch.Tensor:
         spec_features = self.specs_model(spec_input)
         combined_features = spec_features
 
         if self.text_model is not None:
-            if audio_input is not None:
-                text_features = self.text_model(audio_input)            # text input extracted from raw audio (e.g., Whisper)
-                combined_features = torch.cat((combined_features, text_features), dim=1)
-            else:
-                raise ValueError("Text model requires audio input to extract text features.")
+            text_features = self.text_model(audio_input)            # text input extracted from raw audio (e.g., Whisper)
+            combined_features = torch.cat((combined_features, text_features), dim=1)
 
         if self.audio_model is not None:
-            if audio_input is not None:
-                audio_features = self.audio_model(audio_input)
-                combined_features = torch.cat((combined_features, audio_features), dim=1)
-            else:
-                raise ValueError("Audio model requires audio input.")
-
-        if self.features_model is not None:
-            if features_input is not None:
-                numeric_features = self.features_model(features_input)
-                combined_features = torch.cat((combined_features, numeric_features), dim=1)
-            else:
-                raise ValueError("Features model requires numeric features input.")
+            audio_features = self.audio_model(audio_input)
+            combined_features = torch.cat((combined_features, audio_features), dim=1)
 
         logits = self.output_projection(combined_features)
         return logits
