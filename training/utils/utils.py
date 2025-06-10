@@ -300,9 +300,9 @@ class ClassificationModelTrainer(ModelTrainer):
             raise ValueError(f"Target mode {target_mode} not available in ClassificationModelTrainer")
         
         if data_mode == "audiospecs":
-            self.model_call = self._audio_spec_model_call
+            self.model_call = audio_spec_model_call
         elif data_mode == "default":
-            self.model_call = self._default_model_call
+            self.model_call = default_model_call
         else:
             raise ValueError(f"Unknown data_model: {data_mode}")
 
@@ -333,7 +333,7 @@ class ClassificationModelTrainer(ModelTrainer):
             self.optimizer.zero_grad()
 
             with torch.amp.autocast("cuda"):
-                outputs = self.model_call(inputs)
+                outputs = self.model_call(self.model, inputs)
                 loss = self.loss_function(outputs, labels)
 
             # Scaled Backward Pass and gradient Clipping
@@ -381,7 +381,7 @@ class ClassificationModelTrainer(ModelTrainer):
             for i, data in enumerate(loader):
                 inputs, labels = data
                 labels = labels.to(self.model.device, non_blocking=True).long()
-                outputs = self.model_call(inputs)
+                outputs = self.model_call(self.model, inputs)
                 loss = self.loss_function(outputs, labels)
 
                 running_loss += loss

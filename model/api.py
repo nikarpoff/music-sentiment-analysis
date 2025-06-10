@@ -7,7 +7,6 @@ import numpy as np
 from datetime import datetime
 from modelarch import *
 from fastapi import FastAPI, File, UploadFile
-from sklearn.preprocessing import MinMaxScaler
 
 import utils
 
@@ -15,7 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, 'data')
 
 MODEL_NAME_HS = "specstr_hs_13M.pth"
-MODEL_NAME_RE = "specstr_re_8M.pth"
+MODEL_NAME_RE = "specstr_re_TEST.pth"
 
 CLASSES_JSON_NAME_HS = f"classes_hs.json"
 CLASSES_JSON_NAME_RE = f"classes_re.json"
@@ -41,8 +40,7 @@ classes_hs = json.load(open(os.path.join(DATA_PATH, CLASSES_JSON_NAME_HS), 'r'))
 classes_re = json.load(open(os.path.join(DATA_PATH, CLASSES_JSON_NAME_RE), 'r'))
 classes = classes_hs + classes_re
 
-scaler = MinMaxScaler(feature_range=(0, 1))
-
+specs_processor = utils.SpectrogramProcessor(device="cuda")
 
 @app.post("/api/model/predict")
 async def predict(file: UploadFile = File(...)):
@@ -50,9 +48,7 @@ async def predict(file: UploadFile = File(...)):
     audio_bytes = await file.read()
 
     # Form mel-spectrogram
-    spec = utils.get_mel_spec(audio_bytes)
-    spec = scaler.fit_transform(spec)
-    spec = torch.from_numpy(spec).float().unsqueeze(0)
+    spec = specs_processor.pipeline(audio_bytes)
 
     # Log current time.
     start_time = datetime.now()
@@ -68,7 +64,6 @@ async def predict(file: UploadFile = File(...)):
 
     # Form and send response.
     probabilities = np.concatenate((hs_probs, re_probs), axis=0)
-    print(probabilities)
     prediction = classes[probabilities.argmax()]
     
     return {"predict": prediction, "probs": probabilities.tolist(), "classes": classes}

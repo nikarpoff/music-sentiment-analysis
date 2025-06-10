@@ -92,8 +92,8 @@ def get_specs_scaler(melspecs_stats_path) -> MinMaxScaler:
         with open(melspecs_stats_path) as file:
             stats = json.load(file)
 
-            min_amplitude = stats["max_amplitude"]
-            max_amplitude = stats["min_amplitude"]
+            min_amplitude = stats["min_amplitude"]
+            max_amplitude = stats["max_amplitude"]
     else:
         print("Warning! For MinMaxScaler max/min amplitudes from melspecs_stats.json required! Now using min/max defaults values.")
         print("You can run scripts.stats to get required statistics and avoid this warning.")
@@ -104,11 +104,17 @@ def get_specs_scaler(melspecs_stats_path) -> MinMaxScaler:
     # Average audio can have -90 min amplitude and +29.6 max amplitude. So melspecs should be scaled. 
     scaler = MinMaxScaler(feature_range=(0, 1))
     # Cause fitting MinMaxScaler is too expencieve, params can be set manually
-    scaler.min_ = np.array([0])
-    scaler.scale_ = np.array([1 / (max_amplitude - min_amplitude)])
-    scaler.data_min_ = np.array([min_amplitude])
-    scaler.data_max_ = np.array([max_amplitude])
-    scaler.data_range_ = np.array([max_amplitude - min_amplitude])
+    data_min  = np.array([min_amplitude])
+    data_max  = np.array([max_amplitude])
+    data_range = data_max - data_min
+    scale_ = (scaler.feature_range[1] - scaler.feature_range[0]) / data_range
+    min_   = scaler.feature_range[0] - data_min * scale_
+
+    scaler.scale_ = scale_
+    scaler.min_ = min_
+    scaler.data_min_ = data_min
+    scaler.data_max_ = data_max
+    scaler.data_range_ = data_range
 
     return scaler, min_amplitude, max_amplitude
 
@@ -172,7 +178,7 @@ if __name__ == "__main__":
         # Load the dataset.
         kfold_dataloader = KFoldSpecsDataLoader(dataset_path, dataset_name, kfold_splits, target_mode, pad_value=min_amp,
                                                 batch_size=batch_size, max_seq_len=max_seq_len, min_seq_len=min_seq_len, 
-                                                use_augmentation=True, num_workers=4, test_size=0.2, outputs_path=outputs_path,
+                                                use_augmentation=True, num_workers=8, test_size=0.2, outputs_path=outputs_path,
                                                 transform_specs=transform_specs, moods=moods, random_state=random_state)
     elif model_type in RAW_AUDIO_MODELS or model_type in LIRYCS_MODELS:  # raw audio models or audio->lirycs models required raw audio data loader
         max_seq_len = int(os.getenv(f"{model_type.upper()}_MAX_SEQ_LEN", 50000))
@@ -197,7 +203,7 @@ if __name__ == "__main__":
     if model_type == SPECSTR:
         dropout = float(os.getenv("SPECSTR_DROPOUT", 0.2))
 
-        model = SpectrogramTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
+        model = SpectrogramSmallTransformer(output_dim=output_dim, dropout=dropout, device=device).to(device)
     elif model_type == SPECS_AUTOENCODER:
         dropout = float(os.getenv("SPECS_AUTOENCODER_DROPOUT", 0.2))
 
