@@ -1,3 +1,17 @@
+# Copyright [2024] [Nikita Karpov]
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import torch
 from torch import nn
 import torch.functional as F
@@ -17,7 +31,7 @@ class SpectrogramProcessor:
                  hop_len=256,
                  n_mels=96,
                  min_db_value=-90.0,
-                 max_db_value=40.,
+                 max_db_value=29.7,
                  inference_window_len: int = 4096,
                  inference_hop_len: int = 2048,
                  inference_max_hops: int = 8,
@@ -36,21 +50,33 @@ class SpectrogramProcessor:
             hop_length=hop_len,
             n_mels=n_mels,
             window_fn=torch.hann_window,
+            center=False,
+            pad_mode='constant',
+            norm='slaney',
+            mel_scale='slaney'
         ).to(device)
-        self.db_transform = torchaudio.transforms.AmplitudeToDB(stype="power").to(device)
 
-    def pipeline(self, audio_bytes):
-        spec = self.get_mel_spec(audio_bytes)
+    def load_mp3_bytes(self, data: bytes, request_uuid, normalize: bool = True):
+        bio = io.BytesIO(data)
+        try:
+            return torchaudio.load(bio, normalize=normalize)
+        except RuntimeError:
+            raise ValueError(f"Failed to load audio data at request {request_uuid}. Ensure the input is a valid MP3 or WAV file.")
+
+    def pipeline(self, audio_bytes, request_uuid):
+        waveform, sr = self.load_mp3_bytes(audio_bytes, request_uuid)
+        waveform = waveform.to(self.device)
+
+        spec = self.get_mel_spec(waveform, sr)
         spec = self.minmax_scale_tensor(spec)
         return self.preprocess_spectrogram(spec)
 
-    def get_mel_spec(self, audio_bytes):
-        waveform, sr = torchaudio.load(io.BytesIO(audio_bytes), normalize=True)
+    def get_mel_spec(self, waveform: torch.Tensor, sr: int = 12000) -> torch.Tensor:
         if sr != self.target_sample_rate:
-            waveform = torchaudio.functional.resample(waveform, sr, self.target_sample_rate).to(self.device)
+            waveform = torchaudio.functional.resample(waveform, sr, self.target_sample_rate)
         
         spec = self.mel_transform(waveform)
-        spec_db = self.db_transform(spec)
+        spec_db = 10.0 * torch.log10(spec.clamp(min=1e-10))
 
         return spec_db
 
@@ -58,7 +84,7 @@ class SpectrogramProcessor:
         spec_db = spec_db.clamp(min=self.min_db_value, max=self.max_db_value)
         return (spec_db - self.min_db_value) / (self.max_db_value - self.min_db_value)
 
-    def preprocess_spectrogram(self, spec: np.array,) -> torch.Tensor:
+    def preprocess_spectrogram(self, spec: np.array) -> torch.Tensor:
         """
         Batch the mel-spectrogram throught windows.
         """

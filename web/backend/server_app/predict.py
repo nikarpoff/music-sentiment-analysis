@@ -74,6 +74,11 @@ class Prediction:
             return self._form_internal_server_error("Модель недоступна. Попробуйте позже!")
 
         if response.status_code != 200:
+            if response.status_code == 400:
+                error_data = response.json()
+                print("Model prediction failed with error: ", error_data["error"])
+                return self._form_bad_request("Ошибка при обработке аудио-файла. Убедитесь, что файл является корректным MP3 или WAV.")
+
             print("Model prediction failed with status code: ", response.status_code)
             return self._form_internal_server_error("Модель недоступна. Попробуйте позже!")
             
@@ -134,6 +139,11 @@ class Prediction:
             return self._form_internal_server_error("Модель недоступна. Попробуйте позже!")
         
         if response.status_code != 200:
+            if response.status_code == 400:
+                error_data = response.json()
+                print("Model prediction failed with error: ", error_data["error"])
+                return self._form_bad_request("Ошибка при обработке аудио-файла. Убедитесь, что файл является корректным MP3 или WAV.")
+
             print("Model prediction failed with status code: ", response.status_code)
             return self._form_internal_server_error("Модель недоступна. Попробуйте позже!")
 
