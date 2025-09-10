@@ -49,6 +49,8 @@ Classification accuracy exceeding that of a simple audio feature analysis networ
 - $F_{1_{test}}$ score of 0.74 on the relaxing vs. energetic classification task;
 - $F_{1_{test}}$ score of 0.70 on the happy vs. sad classification task.
 
+[Video demonstration](https://cloud.mail.ru/public/AJEK/NDsyPhrF1).
+
 More results in [report](report.pdf).
 
 The developed model was integrated into a software system for determining the emotional coloring of music based on audio files.
